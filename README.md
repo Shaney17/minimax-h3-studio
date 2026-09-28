@@ -11,8 +11,9 @@ rebuild.
 
 - **Requests** (home): every saved request, newest first. The filter matches
   titles regardless of case and Vietnamese accents ("rung" finds "Rừng"). Each
-  row's **⋯** menu copies the request into a new one or deletes it. Click a row
-  for its detail page: progress, video, prompt, and reference images.
+  row's **⋯** menu continues the shot, copies the request into a new one, or
+  deletes it. Click a row for its detail page: progress, video, prompt,
+  reference images, and the scene chain. Continued shots are marked with ↳.
 - **Tạo request**: title (defaults to the prompt's first line), the prompt for
   node 190, three reference images for LoadImage nodes 28, 29, and 30, and
   duration, MP4 size, and resolution (0.2 MP preview or the original
@@ -24,6 +25,35 @@ rebuild.
 - **Cài đặt**: save, test, or delete the Runpod API key. A saved key is required
   to submit, and lets the server keep downloading finished videos after the
   browser is closed.
+
+## Continuing a shot (frame anchor)
+
+Each request is independent, so consecutive shots do not join by themselves.
+**Tiếp nối cảnh** (on a finished request's page or in the row's ⋯ menu) starts
+the next shot from the exact last frame of the previous video:
+
+1. It copies the prompt, settings, and the three subject images, and extracts
+   the video's final frame in the browser (no ffmpeg needed on the host).
+2. The frame is sent as a fourth image, `<Picture 4>`. The request adds three
+   nodes to the workflow: `LoadImage` 300, and `MiniMaxH3AddGuide` 301/302 that
+   anchor it at frame 0 of stage 1 (base latent, node 121) and stage 2 (upscaled
+   latent, node 157). Each stage needs its own guide because the node encodes
+   the image at the size of the latent it receives.
+3. It adds the wording from MiniMax's official Ref2VA prompt guide:
+   `<Picture 4> is the first frame of [Shot 1]` in `subject_definitions`,
+   `keyframe completion` in the `summary` task type, and a `retention_analysis`
+   line. Rewrite the scene description for the new shot, and keep
+   `subject_definitions` unchanged between shots so the characters stay stable.
+
+The form's step 04 does the same manually: pick a finished request or upload any
+image, then **Thêm câu neo vào prompt**. A request with the anchor off sends the
+original workflow unchanged. Anchored shots are linked; a shot's page lists its
+chain and **Phát liên tục** plays the stored scenes back to back.
+
+The anchor needs no worker rebuild: the nodes ship with ComfyUI v0.37 in the
+current image. Whether this community hybrid FL2VA/Ref2VA checkpoint honours
+references and a keyframe together as well as the official Ref2VA model does is
+still to be measured.
 
 ## Hosting on another machine (private, over Tailscale)
 

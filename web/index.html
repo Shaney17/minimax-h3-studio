@@ -113,6 +113,33 @@
               </div>
             </section>
 
+            <section class="step anchor-step">
+              <div class="step-head"><span class="step-number">04</span><div><h2>Nối tiếp cảnh <small class="optional">tuỳ chọn</small></h2><p>Neo khung đầu của video vào một ảnh, thường là khung cuối của cảnh trước, để cảnh mới bắt đầu đúng tư thế, bố cục và ánh sáng.</p></div></div>
+              <div class="field">
+                <label class="toggle" for="anchor-enabled"><input id="anchor-enabled" type="checkbox" /> Neo khung đầu vào một ảnh</label>
+                <div id="anchor-options" class="anchor-options" hidden>
+                  <div class="anchor-grid">
+                    <div class="anchor-sources">
+                      <label for="anchor-request">Khung cuối của cảnh trước
+                        <select id="anchor-request"><option value="">— Chọn cảnh trước —</option></select>
+                      </label>
+                      <div class="anchor-or"><span>hoặc</span></div>
+                      <label class="small-button file-button" for="anchor-file">Tải ảnh neo lên<input id="anchor-file" type="file" accept="image/png,image/jpeg,image/webp" /></label>
+                    </div>
+                    <figure class="anchor-figure">
+                      <img id="anchor-preview" alt="Ảnh neo khung đầu" hidden />
+                      <figcaption id="anchor-meta" class="image-meta">Chưa có ảnh neo</figcaption>
+                    </figure>
+                  </div>
+                  <div class="anchor-prompt">
+                    <button id="anchor-apply" type="button" class="small-button">Thêm câu neo vào prompt</button>
+                    <span id="anchor-prompt-state" role="status"></span>
+                  </div>
+                  <p class="render-hint">Ảnh neo được gửi làm <code>&lt;Picture 4&gt;</code> và gắn vào khung 0 ở cả hai stage bằng node <code>MiniMaxH3AddGuide</code>. Theo hướng dẫn chính thức của MiniMax H3, prompt cần câu <code>&lt;Picture 4&gt; is the first frame of [Shot 1]</code> và nhãn <code>keyframe completion</code> trong summary; nút trên tự thêm các phần còn thiếu. Giữ nguyên <code>subject_definitions</code> giữa các cảnh để nhân vật ổn định.</p>
+                </div>
+              </div>
+            </section>
+
             <div id="form-error" class="error-box" hidden></div>
             <div class="submit-bar">
               <div><span class="submit-kicker">WORKFLOW</span><p id="workflow-detail">Đang tải workflow…</p></div>
@@ -126,6 +153,7 @@
           <header class="page-head">
             <div><a class="back-link" href="#/requests">← Requests</a><h1 id="detail-title">Request</h1><div id="detail-meta" class="detail-meta"></div></div>
             <div class="head-actions">
+              <button id="detail-continue" type="button" class="primary-button" disabled>Tiếp nối cảnh →</button>
               <button id="detail-copy" type="button" class="small-button">Sao chép</button>
               <button id="detail-delete" type="button" class="small-button danger">Xoá</button>
             </div>
@@ -142,6 +170,11 @@
               <pre id="detail-prompt" class="detail-prompt"></pre>
             </div>
             <div class="detail-side">
+              <div id="chain-card" class="panel detail-card" hidden>
+                <h2>Chuỗi cảnh</h2>
+                <ol id="chain-list" class="chain-list"></ol>
+                <button id="chain-play" type="button" class="small-button">▶ Phát liên tục</button>
+              </div>
               <div class="panel detail-card"><h2>Ảnh tham chiếu</h2><div id="detail-images" class="detail-images"></div></div>
               <div class="panel detail-card"><h2>Thông tin</h2><dl id="detail-info" class="detail-info"></dl></div>
             </div>
@@ -170,6 +203,7 @@
       </main>
     </div>
     <div id="row-menu" class="row-menu" role="menu" hidden>
+      <button type="button" role="menuitem" data-action="continue">Tiếp nối cảnh này</button>
       <button type="button" role="menuitem" data-action="copy">Sao chép sang request mới</button>
       <button type="button" role="menuitem" data-action="delete" class="danger">Xoá request</button>
     </div>

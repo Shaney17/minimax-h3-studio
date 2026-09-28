@@ -14,6 +14,10 @@ const STATUS_LABELS = {
   SUBMIT_FAILED: "Gửi lỗi",
   EXPIRED: "Hết hạn",
 };
+// Frame anchor: an extra LoadImage that is both reference <Picture 4> (so the
+// prompt can name it) and a MiniMaxH3AddGuide keyframe at frame 0 in each stage.
+const ANCHOR = { load: "300", guide1: "301", guide2: "302", label: "<Picture 4>" };
+const IMAGE_LABELS = ["Nhân vật 1", "Nhân vật 2", "Bối cảnh", "Khung neo"];
 const PROGRESS = {
   SUBMITTING: [10, "Đang gửi request đến Runpod…"],
   IN_QUEUE: [35, "Job đang trong hàng đợi. Worker sẽ khởi động khi đến lượt (lần đầu có thể mất vài phút)."],
@@ -37,6 +41,13 @@ const state = {
   durations: DEFAULT_DURATIONS,
   timeoutMin: 60,
   history: [],
+  anchorFile: null,
+  anchorUrl: null,
+  anchorSeq: 0,
+  fillSeq: 0,
+  continuesFrom: null,
+  chainFor: null,
+  chain: [],
 };
 
 /* ---------- helpers ---------- */
@@ -97,6 +108,70 @@ function statusBadge(status) {
 function showBox(id, message) {
   $(id).textContent = message || "";
   $(id).hidden = !message;
+}
+
+function waitFor(target, event, ms = 30000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Hết thời gian đọc video.")), ms);
+    target.addEventListener(event, () => { clearTimeout(timer); resolve(); }, { once: true });
+    target.addEventListener("error", () => { clearTimeout(timer); reject(new Error("Trình duyệt không đọc được video.")); }, { once: true });
+  });
+}
+
+/** Grab the final frame of a stored (same-origin) video as a PNG file. */
+async function extractLastFrame(url, name) {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  video.src = url;
+  try {
+    await waitFor(video, "loadeddata");
+    if (!Number.isFinite(video.duration)) throw new Error("Không xác định được độ dài video.");
+    // Seek just inside the end so the decoder shows the last frame.
+    video.currentTime = Math.max(0, video.duration - 0.01);
+    await waitFor(video, "seeked");
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    const blob = await new Promise((resolve, reject) =>
+      canvas.toBlob((result) => (result ? resolve(result) : reject(new Error("Không tạo được ảnh khung cuối."))), "image/png"));
+    return new File([blob], name, { type: "image/png" });
+  } finally {
+    video.removeAttribute("src");
+    video.load();
+  }
+}
+
+/**
+ * Add the official Ref2VA wording for a first-frame anchor: a standalone
+ * <Picture 4> entry in subject_definitions, the `keyframe completion` task type
+ * in summary, and a retention line. Each part is added only when missing.
+ */
+function applyAnchorPrompt(text) {
+  let out = text;
+  if (!out.includes(ANCHOR.label)) {
+    const line = `${ANCHOR.label} is the first frame of [Shot 1]: the final frame of the previous scene. ` +
+      "The target video starts exactly from this frame, preserving its composition, character positions and poses, " +
+      "lighting, and camera framing, then continues the action naturally from that state.";
+    const end = out.search(/\n\s*\nsummary:/);
+    out = end >= 0 ? `${out.slice(0, end)}\n${line}${out.slice(end)}` : `${line}\n\n${out}`;
+  }
+  out = out.replace(/(summary:\s*)\[([^\]\n]*)\]/, (match, head, types) =>
+    types.includes("keyframe completion") ? match : `${head}[${types} + keyframe completion]`);
+  if (!out.includes(`${ANCHOR.label} ([Shot 1] first frame)`)) {
+    out = out.replace(/(retention_analysis:[^\n]*\n)/, `$1${ANCHOR.label} ([Shot 1] first frame): fully_preserved - ` +
+      "the composition, character positions, poses, lighting, and framing of the previous scene's final frame are kept at 0.00 seconds.\n");
+  }
+  return out;
+}
+
+function anchorPromptMissing(text) {
+  const missing = [];
+  if (!text.includes(ANCHOR.label)) missing.push(`câu “${ANCHOR.label} is the first frame of [Shot 1]”`);
+  if (!/summary:\s*\[[^\]\n]*keyframe completion/.test(text)) missing.push("nhãn “keyframe completion” trong summary");
+  return missing;
 }
 
 /* ---------- API key ---------- */
@@ -216,8 +291,9 @@ function renderRow(item) {
   });
 
   const titleCell = element("td", "title-cell");
-  const link = element("a", "row-title", item.title);
+  const link = element("a", "row-title", item.continues_from ? `↳ ${item.title}` : item.title);
   link.href = `#/requests/${item.id}`;
+  if (item.continues_from) link.title = "Cảnh nối tiếp từ một request trước";
   titleCell.append(link, element("span", "row-prompt", item.prompt));
 
   const statusCell = element("td");
@@ -292,6 +368,30 @@ function validateWorkflow(graph) {
   for (const id of ["111", "154", "112", "102"]) {
     if (!graph[id]?.inputs) throw new Error(`Không tìm thấy nút ${id} trong workflow.`);
   }
+  // Nodes the frame anchor wires into (see addFrameAnchor).
+  const anchorNodes = { "4": "VAELoader", "121": "MiniMaxH3ReferenceToVideo", "145": "BasicGuider", "146": "BasicGuider", "157": "LTXVConcatAVLatent" };
+  for (const [id, type] of Object.entries(anchorNodes)) {
+    if (graph[id]?.class_type !== type) throw new Error(`Nút ${id} phải là ${type} để dùng khung neo.`);
+  }
+}
+
+/**
+ * Anchor frame 0 of the video to the image in `name`. Stage 1 (guider 145)
+ * guides the base latent; stage 2 (guider 146) needs its own guide because
+ * MiniMaxH3AddGuide encodes the image at the size of the latent it receives,
+ * and stage 2 samples the upscaled latent from node 157.
+ */
+function addFrameAnchor(graph, name) {
+  graph[ANCHOR.load] = { class_type: "LoadImage", inputs: { image: name }, _meta: { title: "Frame anchor" } };
+  graph["121"].inputs["ref_images.ref_image_3"] = [ANCHOR.load, 0];
+  const guide = (latent) => ({
+    class_type: "MiniMaxH3AddGuide",
+    inputs: { positive: ["121", 0], vae: ["4", 0], latent, image: [ANCHOR.load, 0], frame_idx: 0 },
+  });
+  graph[ANCHOR.guide1] = { ...guide(["121", 1]), _meta: { title: "Anchor frame 0 · stage 1" } };
+  graph[ANCHOR.guide2] = { ...guide(["157", 0]), _meta: { title: "Anchor frame 0 · stage 2" } };
+  graph["145"].inputs.conditioning = [ANCHOR.guide1, 0];
+  graph["146"].inputs.conditioning = [ANCHOR.guide2, 0];
 }
 
 async function loadWorkflow() {
@@ -345,6 +445,78 @@ function previewImage(index, file) {
   showBox("form-error", "");
 }
 
+/* ---------- frame anchor ---------- */
+
+function setAnchorFile(file, continuesFrom) {
+  if (state.anchorUrl) URL.revokeObjectURL(state.anchorUrl);
+  state.anchorFile = file;
+  state.anchorUrl = file ? URL.createObjectURL(file) : null;
+  state.continuesFrom = file ? continuesFrom : null;
+  $("anchor-preview").hidden = !file;
+  if (file) $("anchor-preview").src = state.anchorUrl;
+  else $("anchor-preview").removeAttribute("src");
+  $("anchor-meta").textContent = file ? `${file.name} · ${sizeLabel(file.size)}` : "Chưa có ảnh neo";
+}
+
+function anchorCandidates() {
+  return state.history.filter((item) => item.status === "COMPLETED" && item.video_name);
+}
+
+function populateAnchorOptions() {
+  const select = $("anchor-request");
+  const current = select.value;
+  const options = anchorCandidates().map((item) => {
+    const option = element("option", "", `${item.title} · ${formatTime(item.created_at)}`);
+    option.value = item.id;
+    return option;
+  });
+  const placeholder = element("option", "", anchorCandidates().length ? "— Chọn cảnh trước —" : "Chưa có request nào có video lưu trên máy");
+  placeholder.value = "";
+  select.replaceChildren(placeholder, ...options);
+  if ([...select.options].some((option) => option.value === current)) select.value = current;
+}
+
+function ensureAnchorOption(item) {
+  const select = $("anchor-request");
+  if (![...select.options].some((option) => option.value === item.id)) {
+    const option = element("option", "", `${item.title} · ${formatTime(item.created_at)}`);
+    option.value = item.id;
+    select.append(option);
+  }
+  select.value = item.id;
+}
+
+function setAnchorEnabled(enabled) {
+  $("anchor-enabled").checked = enabled;
+  $("anchor-options").hidden = !enabled;
+  updateAnchorPromptState();
+}
+
+function updateAnchorPromptState() {
+  const box = $("anchor-prompt-state");
+  if (!$("anchor-enabled").checked) {
+    box.textContent = "";
+    return;
+  }
+  const missing = anchorPromptMissing($("prompt-text").value);
+  box.textContent = missing.length ? `Prompt còn thiếu: ${missing.join(", ")}.` : "Prompt đã có câu neo và nhãn keyframe completion.";
+  box.className = missing.length ? "anchor-warn" : "anchor-ok";
+}
+
+/** Use the final frame of a saved request's video as the anchor. */
+async function useRequestAsAnchor(id) {
+  const seq = ++state.anchorSeq;
+  setAnchorFile(null, null);
+  if (!id) return;
+  const item = state.history.find((entry) => entry.id === id) || await localJson(`/api/requests/${encodeURIComponent(id)}`);
+  if (!item.video_name) throw new Error("Request này không có video lưu trên máy nên không lấy được khung cuối.");
+  $("anchor-meta").textContent = "Đang lấy khung cuối của video…";
+  const file = await extractLastFrame(`/api/requests/${item.id}/video`, `last_frame_${item.id.slice(0, 8)}.png`);
+  if (seq !== state.anchorSeq) return;
+  setAnchorFile(file, item.id);
+  $("anchor-file").value = "";
+}
+
 function resetForm() {
   $("title-text").value = "";
   setPrompt(state.defaultPrompt, false);
@@ -356,29 +528,43 @@ function resetForm() {
     $(`image-${index}`).value = "";
     previewImage(index, null);
   }
+  state.anchorSeq++;
+  setAnchorFile(null, null);
+  $("anchor-request").value = "";
+  $("anchor-file").value = "";
+  setAnchorEnabled(false);
   showBox("form-error", "");
   $("copy-banner").hidden = true;
   $("new-heading").textContent = "Tạo request mới";
   state.formSource = null;
 }
 
-async function fillFromRequest(id) {
+/** Copy a request into the form; with `continueScene`, anchor it to that request's last frame. */
+async function fillFromRequest(id, { continueScene = false } = {}) {
   resetForm();
-  $("new-heading").textContent = "Sao chép request";
+  const seq = ++state.fillSeq;
+  const stale = () => seq !== state.fillSeq;
+  $("new-heading").textContent = continueScene ? "Tiếp nối cảnh" : "Sao chép request";
   showBox("copy-banner", "Đang nạp request cũ…");
   try {
     const item = await localJson(`/api/requests/${encodeURIComponent(id)}`);
-    for (const image of item.images) {
+    if (stale()) return;
+    if (continueScene && !item.video_name) {
+      throw new Error("Chỉ tiếp nối được request đã hoàn tất và có video lưu trên máy.");
+    }
+    // The anchor slot (4) belongs to the previous shot; a new anchor is chosen below.
+    for (const image of item.images.filter((entry) => entry.slot <= 3)) {
       const response = await fetch(image.url);
       if (!response.ok) throw new Error(`Không đọc được ảnh ${image.slot} đã lưu.`);
       const blob = await response.blob();
+      if (stale()) return;
       const file = new File([blob], image.name, { type: image.mime });
       const transfer = new DataTransfer();
       transfer.items.add(file);
       $(`image-${image.slot}`).files = transfer.files;
       previewImage(image.slot, file);
     }
-    $("title-text").value = `${item.title} (bản sao)`.slice(0, 200);
+    $("title-text").value = `${item.title} (${continueScene ? "cảnh tiếp" : "bản sao"})`.slice(0, 200);
     setPrompt(item.prompt, true);
     let durationNote = "";
     if (item.duration != null) {
@@ -390,9 +576,33 @@ async function fillFromRequest(id) {
     if (item.crf != null) $("video-size").value = String(Number(item.crf));
     if (item.resolution != null) $("resolution").value = String(Number(item.resolution));
     state.formSource = id;
-    showBox("copy-banner", `Đã sao chép tiêu đề, prompt, thông số và 3 ảnh từ “${item.title}”. Chỉnh sửa nếu cần rồi bấm Gửi request.${durationNote}`);
+    if (continueScene) {
+      setAnchorEnabled(true);
+      ensureAnchorOption(item);
+      await useRequestAsAnchor(item.id);
+      if (stale()) return;
+      setPrompt(applyAnchorPrompt($("prompt-text").value), true);
+      updateAnchorPromptState();
+      showBox("copy-banner", `Đang tiếp nối “${item.title}”: đã chép prompt, thông số, 3 ảnh nhân vật, lấy khung cuối của video làm khung đầu và thêm câu neo vào prompt. ` +
+        `Hãy sửa phần mô tả cảnh (summary, detailed_description) cho cảnh mới rồi bấm Gửi request.${durationNote}`);
+    } else {
+      // A retry of an anchored shot keeps the same anchor and the same parent scene.
+      const anchor = item.images.find((entry) => entry.slot === 4);
+      if (anchor) {
+        const response = await fetch(anchor.url);
+        if (!response.ok) throw new Error("Không đọc được khung neo đã lưu.");
+        const blob = await response.blob();
+        if (stale()) return;
+        setAnchorEnabled(true);
+        setAnchorFile(new File([blob], anchor.name, { type: anchor.mime }), item.continues_from);
+        updateAnchorPromptState();
+      }
+      showBox("copy-banner", `Đã sao chép tiêu đề, prompt, thông số và ${anchor ? "3 ảnh cùng khung neo" : "3 ảnh"} từ “${item.title}”. ` +
+        `Chỉnh sửa nếu cần rồi bấm Gửi request.${durationNote}`);
+    }
     updateTimingHint();
   } catch (error) {
+    if (stale()) return;
     showBox("copy-banner", "");
     showBox("form-error", error.message || "Không sao chép được request.");
   }
@@ -425,20 +635,32 @@ async function buildRequest() {
     graph["102"].inputs.value = 0.2;
   }
   const images = [];
+  const imageName = (slot, file) => `h3_ref_${slot}_${Date.now()}_${file.name.replace(/[^A-Za-z0-9._-]/g, "_")}`;
   for (let index = 1; index <= 3; index++) {
     const file = $(`image-${index}`).files[0];
     if (!file) throw new Error(`Hãy chọn ảnh tham chiếu ${index}.`);
-    const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
-    const name = `h3_ref_${index}_${Date.now()}_${safeName}`;
+    const name = imageName(index, file);
     graph[NODE_IDS[index - 1]].inputs.image = name;
     images.push({ name, image: await toDataUrl(file) });
   }
+  const anchored = $("anchor-enabled").checked;
+  if (anchored) {
+    if (!state.anchorFile) throw new Error("Đã bật khung neo nhưng chưa có ảnh neo. Chọn cảnh trước hoặc tải ảnh lên.");
+    const missing = anchorPromptMissing(prompt);
+    if (missing.length) throw new Error(`Prompt còn thiếu ${missing.join(" và ")}. Bấm “Thêm câu neo vào prompt”.`);
+    const name = imageName(4, state.anchorFile);
+    addFrameAnchor(graph, name);
+    images.push({ name, image: await toDataUrl(state.anchorFile) });
+  } else if (prompt.includes(ANCHOR.label)) {
+    throw new Error(`Prompt nhắc tới ${ANCHOR.label} nhưng chưa bật khung neo. Bật khung neo hoặc xoá các câu nhắc tới ${ANCHOR.label}.`);
+  }
   const body = JSON.stringify({
     title: $("title-text").value.trim(),
+    ...(anchored && state.continuesFrom ? { continues_from: state.continuesFrom } : {}),
     input: { workflow: graph, images },
   });
   if (new TextEncoder().encode(body).length > MAX_BODY_BYTES) {
-    throw new Error("Ba ảnh và workflow vượt giới hạn 9,5 MB. Hãy giảm kích thước ảnh rồi thử lại.");
+    throw new Error("Các ảnh và workflow vượt giới hạn 9,5 MB. Hãy giảm kích thước ảnh rồi thử lại.");
   }
   return body;
 }
@@ -450,6 +672,7 @@ async function loadTimingHistory() {
     state.history = [];
   }
   updateTimingHint();
+  populateAnchorOptions();
 }
 
 function updateTimingHint() {
@@ -510,6 +733,7 @@ async function loadDetail(id) {
     }
     if (state.route?.name !== "detail" || state.route.id !== id) return;
     renderDetail(item);
+    if (state.chainFor !== id) loadChain(item);
     if (!FINAL_STATES.has(item.status)) state.detailTimer = setTimeout(() => loadDetail(id), 5000);
   } catch (error) {
     if (state.route?.name !== "detail") return;
@@ -553,8 +777,12 @@ function renderDetail(item) {
     }
   }
 
+  const canContinue = item.status === "COMPLETED" && Boolean(item.video_name);
+  $("detail-continue").disabled = !canContinue;
+  $("detail-continue").title = canContinue ? "Tạo cảnh mới bắt đầu từ khung cuối của video này" : "Cần request đã hoàn tất và có video lưu trên máy";
+
   $("detail-prompt").textContent = item.prompt;
-  const labels = ["Nhân vật 1", "Nhân vật 2", "Bối cảnh"];
+  const labels = IMAGE_LABELS;
   $("detail-images").replaceChildren(...item.images.map((image) => {
     const figure = element("figure");
     const link = element("a");
@@ -581,6 +809,64 @@ function renderDetail(item) {
   $("detail-info").replaceChildren(...info.flatMap(([label, value]) => [element("dt", "", label), element("dd", "", value)]));
 }
 
+/* ---------- scene chain ---------- */
+
+async function loadChain(item) {
+  state.chainFor = item.id;
+  state.chain = [];
+  $("chain-card").hidden = true;
+  if (!item.continues_from && !item.next?.length) return;
+  try {
+    const chain = await localJson(`/api/requests/${item.id}/chain`);
+    if (state.route?.name !== "detail" || state.route.id !== item.id) return;
+    state.chain = chain;
+    renderChain(item.id);
+  } catch {
+    state.chainFor = null;
+  }
+}
+
+function renderChain(currentId, playingId = null) {
+  const list = $("chain-list");
+  list.replaceChildren(...state.chain.map((scene, index) => {
+    const entry = element("li");
+    entry.classList.toggle("current", scene.id === currentId);
+    entry.classList.toggle("playing", scene.id === playingId);
+    const link = element("a", "", `Cảnh ${index + 1}: ${scene.title}`);
+    link.href = `#/requests/${scene.id}`;
+    entry.append(link, element("span", "muted", scene.video ? ` · ${STATUS_LABELS[scene.status] || scene.status}` : " · chưa có video"));
+    return entry;
+  }));
+  const playable = state.chain.filter((scene) => scene.video_name);
+  $("chain-play").disabled = playable.length < 2;
+  $("chain-play").textContent = `▶ Phát liên tục ${playable.length} cảnh`;
+  $("chain-card").hidden = false;
+}
+
+/** Play every stored scene of the chain back to back in the detail player. */
+function playChain() {
+  const scenes = state.chain.filter((scene) => scene.video_name);
+  const video = $("detail-video").querySelector("video");
+  if (!video || scenes.length < 2) return;
+  let index = 0;
+  const playAt = () => {
+    const scene = scenes[index];
+    renderChain(state.detail?.id, scene.id);
+    video.src = `/api/requests/${scene.id}/video`;
+    video.play().catch(() => {});
+  };
+  video.onended = () => {
+    index += 1;
+    if (index < scenes.length) playAt();
+    else {
+      video.onended = null;
+      renderChain(state.detail?.id);
+    }
+  };
+  playAt();
+  video.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
 /* ---------- routing ---------- */
 
 function parseRoute() {
@@ -588,7 +874,7 @@ function parseRoute() {
   const params = new URLSearchParams(query || "");
   const detail = path.match(/^\/requests\/([a-f0-9]{32})$/);
   if (detail) return { name: "detail", id: detail[1] };
-  if (path === "/new") return { name: "new", from: params.get("from") };
+  if (path === "/new") return { name: "new", from: params.get("from"), continueFrom: params.get("continue") };
   if (path === "/settings") return { name: "settings" };
   return { name: "requests" };
 }
@@ -615,10 +901,19 @@ function route() {
   } else if (current.name === "new") {
     document.title = "Tạo request · MiniMax H3 Studio";
     // A copied form is single-use; a plain draft is kept while you browse.
-    if (current.from) fillFromRequest(current.from);
-    else if (state.formSource) resetForm();
+    // History loads first so the anchor picker lists the previous scenes.
+    const history = loadTimingHistory();
+    const source = current.continueFrom || current.from;
+    if (source) {
+      // Clear the previous form at once and block submitting until the copy is loaded.
+      resetForm();
+      showBox("copy-banner", "Đang nạp request cũ…");
+      $("submit-button").disabled = true;
+      history
+        .then(() => fillFromRequest(source, { continueScene: Boolean(current.continueFrom) }))
+        .finally(() => { $("submit-button").disabled = false; });
+    } else if (state.formSource) resetForm();
     updateKeyBadge();
-    loadTimingHistory();
   } else if (current.name === "detail") {
     document.title = "Chi tiết request · MiniMax H3 Studio";
     state.detail = null;
@@ -629,6 +924,8 @@ function route() {
     $("detail-info").replaceChildren();
     $("detail-prompt").textContent = "";
     $("detail-progress").hidden = true;
+    $("chain-card").hidden = true;
+    state.chainFor = null;
     showBox("detail-error", "");
     loadDetail(current.id);
   } else {
@@ -651,6 +948,10 @@ $("row-menu").addEventListener("click", async (event) => {
   closeMenu();
   if (!item) return;
   if (action === "copy") location.hash = `#/new?from=${item.id}`;
+  if (action === "continue") {
+    if (item.status === "COMPLETED" && item.video_name) location.hash = `#/new?continue=${item.id}`;
+    else alert("Chỉ tiếp nối được request đã hoàn tất và có video lưu trên máy.");
+  }
   if (action === "delete" && await deleteRequest(item)) loadList();
 });
 document.addEventListener("click", (event) => {
@@ -666,7 +967,34 @@ $("request-form").addEventListener("submit", submitRequest);
 for (let index = 1; index <= 3; index++) {
   $(`image-${index}`).addEventListener("change", (event) => previewImage(index, event.target.files[0]));
 }
-$("prompt-text").addEventListener("input", () => { state.promptTouched = true; updatePromptCount(); });
+$("prompt-text").addEventListener("input", () => { state.promptTouched = true; updatePromptCount(); updateAnchorPromptState(); });
+$("anchor-enabled").addEventListener("change", () => setAnchorEnabled($("anchor-enabled").checked));
+$("anchor-request").addEventListener("change", () => {
+  showBox("form-error", "");
+  useRequestAsAnchor($("anchor-request").value).catch((error) => {
+    setAnchorFile(null, null);
+    showBox("form-error", error.message || "Không lấy được khung cuối.");
+  });
+});
+$("anchor-file").addEventListener("change", (event) => {
+  const file = event.target.files[0];
+  state.anchorSeq++;
+  $("anchor-request").value = "";
+  if (file && !["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+    event.target.value = "";
+    setAnchorFile(null, null);
+    return showBox("form-error", "Ảnh neo phải là PNG, JPG hoặc WebP.");
+  }
+  setAnchorFile(file || null, null);
+});
+$("anchor-apply").addEventListener("click", () => {
+  setPrompt(applyAnchorPrompt($("prompt-text").value), true);
+  updateAnchorPromptState();
+});
+$("chain-play").addEventListener("click", playChain);
+$("detail-continue").addEventListener("click", () => {
+  if (state.detail) location.hash = `#/new?continue=${state.detail.id}`;
+});
 $("reset-prompt").addEventListener("click", () => setPrompt(state.defaultPrompt, false));
 $("duration-seconds").addEventListener("change", updateTimingHint);
 $("resolution").addEventListener("change", updateTimingHint);

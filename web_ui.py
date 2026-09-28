@@ -49,7 +49,10 @@ JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
 REQUEST_ID = re.compile(r"^[a-f0-9]{32}$")
 DATA_URL = re.compile(r"^data:(image/(?:png|jpeg|webp));base64,(.*)$", re.S)
 IMAGE_EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
-IMAGE_NODES = ("28", "29", "30")
+# LoadImage nodes by slot: three subject references, then the optional frame
+# anchor ("300") that the UI adds when a shot continues from an image.
+IMAGE_NODES = ("28", "29", "30", "300")
+REQUIRED_SLOTS = {1, 2, 3}
 TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "SUBMIT_FAILED", "EXPIRED"}
 POLL_SECONDS = 15
 # Seconds the UI may request. MiniMax H3 is trained on 124-362 frames (~5-15 s at
@@ -84,7 +87,8 @@ CREATE TABLE IF NOT EXISTS requests (
     video_file TEXT,
     video_url TEXT,
     delay_ms INTEGER,
-    execution_ms INTEGER
+    execution_ms INTEGER,
+    continues_from TEXT
 );
 CREATE TABLE IF NOT EXISTS request_images (
     request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
@@ -151,9 +155,9 @@ def init_db() -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(requests)")}
         if "title" not in columns:
             conn.execute("ALTER TABLE requests ADD COLUMN title TEXT NOT NULL DEFAULT ''")
-        for column in ("delay_ms", "execution_ms"):
+        for column, kind in (("delay_ms", "INTEGER"), ("execution_ms", "INTEGER"), ("continues_from", "TEXT")):
             if column not in columns:
-                conn.execute(f"ALTER TABLE requests ADD COLUMN {column} INTEGER")
+                conn.execute(f"ALTER TABLE requests ADD COLUMN {column} {kind}")
         for row in conn.execute("SELECT id, prompt FROM requests WHERE title = ''").fetchall():
             conn.execute("UPDATE requests SET title = ? WHERE id = ?", (default_title(row["prompt"]), row["id"]))
     # The database can hold the Runpod API key; keep it private to this user.
@@ -180,7 +184,7 @@ def runpod_call(method: str, path: str, key: str, body: bytes | None = None) -> 
         return exc.code, exc.read()
 
 
-def record_submission(job_input: dict, key: str, title: str) -> str:
+def record_submission(job_input: dict, key: str, title: str, continues_from: str | None = None) -> str:
     """Store the prompt, settings, workflow, and reference images of a request."""
     graph = job_input["workflow"]
     prompt = graph.get("190", {}).get("inputs", {}).get("value")
@@ -190,7 +194,13 @@ def record_submission(job_input: dict, key: str, title: str) -> str:
     request_id = uuid.uuid4().hex
     folder = FILES_DIR / request_id
     folder.mkdir(mode=0o700)
-    slots = {graph.get(node, {}).get("inputs", {}).get("image"): slot for slot, node in enumerate(IMAGE_NODES, 1)}
+    slots = {
+        graph[node]["inputs"]["image"]: slot
+        for slot, node in enumerate(IMAGE_NODES, 1)
+        if isinstance(graph.get(node, {}).get("inputs", {}).get("image"), str)
+    }
+    if not REQUIRED_SLOTS <= set(slots.values()):
+        raise ValueError("Workflow thiếu một trong các nút ảnh 28, 29, 30.")
     images = []
     try:
         for item in job_input["images"]:
@@ -204,10 +214,12 @@ def record_submission(job_input: dict, key: str, title: str) -> str:
             (folder / file).write_bytes(base64.b64decode(encoded, validate=True))
             original = re.sub(r"^h3_ref_\d_\d+_", "", name)
             images.append((request_id, slot, file, original, mime))
+        if {image[1] for image in images} != set(slots.values()):
+            raise ValueError("Thiếu ảnh cho một nút LoadImage trong workflow.")
         with connect() as conn:
             conn.execute(
-                "INSERT INTO requests (id, created_at, updated_at, status, title, prompt, duration, crf, resolution, key_hint, workflow)"
-                " VALUES (?, ?, ?, 'SUBMITTING', ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO requests (id, created_at, updated_at, status, title, prompt, duration, crf, resolution, key_hint, workflow, continues_from)"
+                " VALUES (?, ?, ?, 'SUBMITTING', ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     request_id, now(), now(), title[:200] or default_title(prompt), prompt,
                     graph.get("111", {}).get("inputs", {}).get("value"),
@@ -215,6 +227,7 @@ def record_submission(job_input: dict, key: str, title: str) -> str:
                     0.2 if megapixels == 0.2 else 1,
                     f"…{key[-4:]}",
                     json.dumps(graph, ensure_ascii=False),
+                    continues_from,
                 ),
             )
             conn.executemany("INSERT INTO request_images VALUES (?, ?, ?, ?, ?)", images)
@@ -342,11 +355,41 @@ def request_summary(row: sqlite3.Row, images: list[sqlite3.Row], full: bool = Tr
         "video_name": row["video_file"],
         "delay_ms": row["delay_ms"],
         "execution_ms": row["execution_ms"],
+        "continues_from": row["continues_from"],
         "images": [
             {"slot": image["slot"], "name": image["original_name"], "mime": image["mime"], "url": f"{base}/images/{image['slot']}"}
             for image in images
         ],
     }
+
+
+def request_chain(row: sqlite3.Row) -> list[dict]:
+    """Scenes linked by continues_from: all ancestors, this request, then the newest
+    completed (else newest) continuation at each step after it."""
+    chain = [row]
+    seen = {row["id"]}
+    with connect() as conn:
+        parent_id = row["continues_from"]
+        while parent_id and parent_id not in seen:
+            parent = conn.execute("SELECT * FROM requests WHERE id = ?", (parent_id,)).fetchone()
+            if not parent:
+                break
+            chain.insert(0, parent)
+            seen.add(parent["id"])
+            parent_id = parent["continues_from"]
+        current = row
+        while True:
+            child = conn.execute(
+                "SELECT * FROM requests WHERE continues_from = ? AND id NOT IN (%s)"
+                " ORDER BY status = 'COMPLETED' DESC, created_at DESC LIMIT 1" % ",".join("?" * len(seen)),
+                (current["id"], *seen),
+            ).fetchone()
+            if not child:
+                break
+            chain.append(child)
+            seen.add(child["id"])
+            current = child
+    return [request_summary(item, [], full=False) for item in chain]
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -486,13 +529,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 by_request.setdefault(image["request_id"], []).append(image)
             self._json(200, [request_summary(row, by_request.get(row["id"], []), full=False) for row in rows])
             return
-        match = re.fullmatch(r"/api/requests/([^/]+)(?:/(video|images/([123])))?", path)
+        match = re.fullmatch(r"/api/requests/([^/]+)(?:/(video|chain|images/([1-4])))?", path)
         if match:
             request_id, part, slot = match.groups()
             row = self._request_row(request_id)
             if not row:
                 return
             folder = FILES_DIR / request_id
+            if part == "chain":
+                self._json(200, request_chain(row))
+                return
             if part == "video":
                 if not row["video_file"]:
                     self._json(404, {"error": "Request này chưa có video lưu trên máy."})
@@ -508,7 +554,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                     return
                 self._send_file(folder / image["file"], image["mime"])
                 return
-            self._json(200, request_summary(row, images))
+            summary = request_summary(row, images)
+            with connect() as conn:
+                summary["next"] = [
+                    {"id": child["id"], "title": child["title"], "status": child["status"]}
+                    for child in conn.execute(
+                        "SELECT id, title, status FROM requests WHERE continues_from = ? ORDER BY created_at", (request_id,))
+                ]
+            self._json(200, summary)
             return
         if path == "/api/health":
             key = self._key()
@@ -596,6 +649,14 @@ class RequestHandler(BaseHTTPRequestHandler):
         # The title is local metadata only; Runpod receives input and the policy below.
         title = payload.pop("title", "") if isinstance(payload, dict) else ""
         title = title.strip() if isinstance(title, str) else ""
+        continues_from = payload.pop("continues_from", None) if isinstance(payload, dict) else None
+        if continues_from is not None:
+            with connect() as conn:
+                known = isinstance(continues_from, str) and REQUEST_ID.fullmatch(continues_from) and conn.execute(
+                    "SELECT 1 FROM requests WHERE id = ?", (continues_from,)).fetchone()
+            if not known:
+                self._json(400, {"error": "Không tìm thấy cảnh trước để nối tiếp."})
+                return
         job_input = payload.get("input") if isinstance(payload, dict) else None
         if not isinstance(job_input, dict) or not isinstance(job_input.get("workflow"), dict) or not isinstance(job_input.get("images"), list):
             self._json(400, {"error": "Thiếu input.workflow hoặc input.images."})
@@ -614,7 +675,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._json(413, {"error": "Request vượt giới hạn 9,5 MB. Hãy giảm kích thước ảnh."})
             return
         try:
-            request_id = record_submission(job_input, key, title)
+            request_id = record_submission(job_input, key, title, continues_from)
         except (ValueError, binascii.Error, OSError, sqlite3.Error) as exc:
             self._json(400, {"error": f"Không lưu được request: {exc}"})
             return
