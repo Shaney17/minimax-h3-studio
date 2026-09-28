@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MiniMax H3 Cinematic Studio</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="admin">
+      <aside class="sidebar">
+        <a class="brand" href="#/requests"><span class="brand-mark">H3</span><span>MINIMAX <b>STUDIO</b></span></a>
+        <nav class="nav" aria-label="Điều hướng chính">
+          <a href="#/requests" data-nav="requests"><span class="nav-icon" aria-hidden="true">☰</span>Requests</a>
+          <a href="#/new" data-nav="new"><span class="nav-icon" aria-hidden="true">＋</span>Tạo request</a>
+          <a href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">⚙</span>Cài đặt</a>
+        </nav>
+        <div class="sidebar-foot">
+          <span class="endpoint"><span class="endpoint-dot"></span>RUNPOD SERVERLESS</span>
+          <code>xjh0wwhkto13ky</code>
+          <span id="key-badge" class="key-badge">Chưa có API key</span>
+        </div>
+      </aside>
+
+      <main class="content">
+        <!-- Request list -->
+        <section id="view-requests" class="view" hidden>
+          <header class="page-head">
+            <div><div class="eyebrow">QUẢN LÝ</div><h1>Requests</h1></div>
+            <a class="primary-button" href="#/new">＋ Tạo request mới</a>
+          </header>
+          <div class="toolbar">
+            <label class="search"><span class="sr-only">Lọc theo tiêu đề</span><span aria-hidden="true">⌕</span><input id="filter-title" type="search" placeholder="Lọc theo tiêu đề…" autocomplete="off" /></label>
+            <span id="list-count" class="muted"></span>
+            <button id="refresh-list" type="button" class="small-button">Làm mới</button>
+          </div>
+          <div class="panel table-panel">
+            <table class="request-table">
+              <thead><tr><th>Tiêu đề</th><th>Trạng thái</th><th>Thông số</th><th>Video</th><th>Tạo lúc ↓</th><th><span class="sr-only">Thao tác</span></th></tr></thead>
+              <tbody id="request-rows"></tbody>
+            </table>
+            <div id="list-empty" class="empty" hidden></div>
+          </div>
+        </section>
+
+        <!-- Create request -->
+        <section id="view-new" class="view" hidden>
+          <header class="page-head">
+            <div><a class="back-link" href="#/requests">← Requests</a><h1 id="new-heading">Tạo request mới</h1></div>
+          </header>
+          <div id="copy-banner" class="info-banner" hidden></div>
+          <div id="key-missing" class="inline-alert" hidden>Chưa có Runpod API key. <a href="#/settings">Thêm API key trong Cài đặt</a> trước khi gửi request.</div>
+          <form id="request-form" class="panel form-panel" novalidate>
+            <section class="step">
+              <div class="step-head"><span class="step-number">01</span><div><h2>Tiêu đề</h2><p>Tóm tắt ngắn để tìm lại request trong danh sách. Để trống sẽ lấy dòng đầu của prompt.</p></div></div>
+              <div class="field"><label class="sr-only" for="title-text">Tiêu đề</label><input id="title-text" type="text" maxlength="200" placeholder="VD: Mara và robot trong mưa neon" autocomplete="off" /></div>
+            </section>
+
+            <section class="step prompt-step">
+              <div class="step-head"><span class="step-number">02</span><div><h2>Prompt video</h2><p>Mô tả câu chuyện, nhân vật, cảnh quay và âm thanh bạn muốn tạo.</p></div></div>
+              <div class="field">
+                <label class="sr-only" for="prompt-text">Prompt video</label>
+                <textarea id="prompt-text" rows="8" placeholder="Đang tải prompt gốc từ workflow…" spellcheck="true"></textarea>
+                <div class="prompt-footer"><span>Giá trị này thay thế prompt ở nút 190 của workflow.</span><button id="reset-prompt" type="button" class="text-button">Khôi phục prompt gốc</button><span id="prompt-count">0 ký tự</span></div>
+              </div>
+              <div class="render-options">
+                <label for="duration-seconds">Thời lượng
+                  <select id="duration-seconds">
+                    <option value="2">2 giây · thử nhanh</option>
+                    <option value="5" selected>5 giây · đề xuất</option>
+                    <option value="10">10 giây</option>
+                    <option value="30">30 giây · bản gốc</option>
+                  </select>
+                </label>
+                <label for="video-size">Dung lượng video
+                  <select id="video-size">
+                    <option value="28" selected>Gọn · đề xuất</option>
+                    <option value="15">Chất lượng gốc</option>
+                  </select>
+                </label>
+                <label for="resolution">Độ phân giải
+                  <select id="resolution">
+                    <option value="0.2" selected>Thử nhanh · 0,2 MP</option>
+                    <option value="1">Workflow gốc · 1 MP</option>
+                  </select>
+                </label>
+              </div>
+              <p class="render-hint">Prompt gốc mô tả 30 giây; hãy chỉnh lời mô tả khi thử đoạn ngắn. Endpoint đang dùng GPU 48 GB, bản 1 MP / 30 giây có thể hết VRAM hoặc vượt giới hạn 20 phút / 8 MB của worker.</p>
+            </section>
+
+            <section class="step images-step">
+              <div class="step-head"><span class="step-number">03</span><div><h2>Ảnh tham chiếu</h2><p>Mỗi ảnh được gắn vào đúng nút LoadImage trong workflow.</p></div></div>
+              <div class="image-grid">
+                <div class="image-card">
+                  <div class="image-card-head"><span class="image-index">I</span><div><h3>Nhân vật 1</h3><p>Chân dung / trang phục</p></div><span class="node-pill">Nút <b>28</b></span></div>
+                  <label class="image-drop" for="image-1"><input id="image-1" type="file" accept="image/png,image/jpeg,image/webp" /><img id="preview-1" alt="Xem trước ảnh nhân vật 1" hidden /><span id="image-label-1" class="image-placeholder"><span>＋</span> Chọn ảnh</span></label>
+                  <div id="image-meta-1" class="image-meta">PNG, JPG hoặc WebP</div>
+                </div>
+                <div class="image-card">
+                  <div class="image-card-head"><span class="image-index">II</span><div><h3>Nhân vật 2</h3><p>Chân dung / hình dáng</p></div><span class="node-pill">Nút <b>29</b></span></div>
+                  <label class="image-drop" for="image-2"><input id="image-2" type="file" accept="image/png,image/jpeg,image/webp" /><img id="preview-2" alt="Xem trước ảnh nhân vật 2" hidden /><span id="image-label-2" class="image-placeholder"><span>＋</span> Chọn ảnh</span></label>
+                  <div id="image-meta-2" class="image-meta">PNG, JPG hoặc WebP</div>
+                </div>
+                <div class="image-card">
+                  <div class="image-card-head"><span class="image-index">III</span><div><h3>Bối cảnh</h3><p>Không gian / ánh sáng</p></div><span class="node-pill">Nút <b>30</b></span></div>
+                  <label class="image-drop" for="image-3"><input id="image-3" type="file" accept="image/png,image/jpeg,image/webp" /><img id="preview-3" alt="Xem trước ảnh bối cảnh" hidden /><span id="image-label-3" class="image-placeholder"><span>＋</span> Chọn ảnh</span></label>
+                  <div id="image-meta-3" class="image-meta">PNG, JPG hoặc WebP</div>
+                </div>
+              </div>
+            </section>
+
+            <div id="form-error" class="error-box" hidden></div>
+            <div class="submit-bar">
+              <div><span class="submit-kicker">WORKFLOW</span><p id="workflow-detail">Đang tải workflow…</p></div>
+              <button id="submit-button" class="primary-button" type="submit">Gửi request <span aria-hidden="true">↗</span></button>
+            </div>
+          </form>
+        </section>
+
+        <!-- Request detail -->
+        <section id="view-detail" class="view" hidden>
+          <header class="page-head">
+            <div><a class="back-link" href="#/requests">← Requests</a><h1 id="detail-title">Request</h1><div id="detail-meta" class="detail-meta"></div></div>
+            <div class="head-actions">
+              <button id="detail-copy" type="button" class="small-button">Sao chép</button>
+              <button id="detail-delete" type="button" class="small-button danger">Xoá</button>
+            </div>
+          </header>
+          <div class="detail-grid">
+            <div class="panel detail-main">
+              <div id="detail-progress" class="progress" hidden>
+                <div class="progress-track"><span id="progress-fill"></span></div>
+                <p id="progress-text"></p>
+              </div>
+              <div id="detail-error" class="error-box" hidden></div>
+              <div id="detail-video" class="detail-video"></div>
+              <h2>Prompt</h2>
+              <pre id="detail-prompt" class="detail-prompt"></pre>
+            </div>
+            <div class="detail-side">
+              <div class="panel detail-card"><h2>Ảnh tham chiếu</h2><div id="detail-images" class="detail-images"></div></div>
+              <div class="panel detail-card"><h2>Thông tin</h2><dl id="detail-info" class="detail-info"></dl></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Settings -->
+        <section id="view-settings" class="view" hidden>
+          <header class="page-head"><div><div class="eyebrow">HỆ THỐNG</div><h1>Cài đặt</h1></div></header>
+          <form id="settings-form" class="panel settings-panel" novalidate>
+            <h2>Runpod API key</h2>
+            <p class="muted">Key được lưu trong <code>data/studio.db</code> trên máy này (chỉ tài khoản của bạn đọc được) và chỉ được gửi tới endpoint <code>xjh0wwhkto13ky</code>. Server cần key đã lưu để tự tải video khi job xong.</p>
+            <div class="key-row">
+              <label class="sr-only" for="api-key">Runpod API key</label>
+              <input id="api-key" type="password" placeholder="Dán Runpod API key" autocomplete="off" spellcheck="false" />
+              <button id="toggle-key" type="button" class="small-button" aria-label="Hiện API key">Hiện</button>
+            </div>
+            <div class="settings-actions">
+              <button type="submit" class="primary-button">Lưu API key</button>
+              <button id="test-key" type="button" class="small-button">Kiểm tra kết nối</button>
+              <button id="delete-key" type="button" class="small-button danger">Xoá key đã lưu</button>
+            </div>
+            <p id="settings-status" class="settings-status" role="status"></p>
+          </form>
+        </section>
+      </main>
+    </div>
+    <div id="row-menu" class="row-menu" role="menu" hidden>
+      <button type="button" role="menuitem" data-action="copy">Sao chép sang request mới</button>
+      <button type="button" role="menuitem" data-action="delete" class="danger">Xoá request</button>
+    </div>
+  </body>
+</html>

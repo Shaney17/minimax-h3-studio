@@ -1,0 +1,478 @@
+{
+  "4": {
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAELoader"
+    }
+  },
+  "5": {
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAELoader"
+    }
+  },
+  "28": {
+    "inputs": {
+      "image": "875dbe37b746599232bd22e08edbf81c95a4104799ecc7cdb9390eeac6e2121b.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "LoadImage"
+    }
+  },
+  "29": {
+    "inputs": {
+      "image": "cb320385cfefbd8face26ade8711f08a4a71958e1569265a51a9045973f3a114.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "LoadImage"
+    }
+  },
+  "30": {
+    "inputs": {
+      "image": "aeadafe702787e65cb30ea8e5d43a58754423e54877544171c8eaf286784f798.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "LoadImage"
+    }
+  },
+  "33": {
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "CLIPLoader"
+    }
+  },
+  "66": {
+    "inputs": {
+      "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17",
+      "values.a": [
+        "111",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "ComfyMathExpression"
+    }
+  },
+  "100": {
+    "inputs": {
+      "unet_name": "minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNETLoader"
+    }
+  },
+  "102": {
+    "inputs": {
+      "value": 1.0000000000000002
+    },
+    "class_type": "easy float",
+    "_meta": {
+      "title": "Final Resolution(Stage 2)"
+    }
+  },
+  "108": {
+    "inputs": {
+      "lora_name": "lightx2v_hybrid-4to8step-Turbo_r48.safetensors",
+      "strength_model": 0.7000000000000002,
+      "model": [
+        "183",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoraLoaderModelOnly"
+    }
+  },
+  "111": {
+    "inputs": {
+      "value": 30
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Duration(Second)"
+    }
+  },
+  "112": {
+    "inputs": {
+      "aspect_ratio": "16:9 (Widescreen)",
+      "megapixels": 0.4,
+      "multiple": 32
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector (Stage1)"
+    }
+  },
+  "120": {
+    "inputs": {
+      "attention": "pytorch attention",
+      "model": [
+        "100",
+        0
+      ]
+    },
+    "class_type": "ModelAttentionBackend",
+    "_meta": {
+      "title": "ModelAttentionBackend"
+    }
+  },
+  "121": {
+    "inputs": {
+      "ref_image_size": "max",
+      "clip": [
+        "33",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ],
+      "audio_vae": [
+        "5",
+        0
+      ],
+      "ref_images.ref_image_0": [
+        "28",
+        0
+      ],
+      "ref_images.ref_image_1": [
+        "29",
+        0
+      ],
+      "ref_images.ref_image_2": [
+        "30",
+        0
+      ],
+      "prompt": [
+        "190",
+        0
+      ],
+      "width": [
+        "112",
+        0
+      ],
+      "height": [
+        "112",
+        1
+      ],
+      "length": [
+        "66",
+        1
+      ]
+    },
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "_meta": {
+      "title": "MiniMaxH3ReferenceToVideo"
+    }
+  },
+  "145": {
+    "inputs": {
+      "model": [
+        "108",
+        0
+      ],
+      "conditioning": [
+        "121",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "BasicGuider"
+    }
+  },
+  "146": {
+    "inputs": {
+      "model": [
+        "108",
+        0
+      ],
+      "conditioning": [
+        "121",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "BasicGuider"
+    }
+  },
+  "148": {
+    "inputs": {
+      "samples": [
+        "160",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAEDecode"
+    }
+  },
+  "150": {
+    "inputs": {
+      "noise": [
+        "155",
+        0
+      ],
+      "guider": [
+        "145",
+        0
+      ],
+      "sampler": [
+        "164",
+        0
+      ],
+      "sigmas": [
+        "165",
+        0
+      ],
+      "latent_image": [
+        "121",
+        1
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "151": {
+    "inputs": {
+      "noise_seed": 0
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "154": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "H3_Stage2",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 15,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "no_preview": false,
+      "images": [
+        "148",
+        0
+      ],
+      "audio": [
+        "161",
+        0
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "VHS_VideoCombine"
+    }
+  },
+  "155": {
+    "inputs": {
+      "noise_seed": 0
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "156": {
+    "inputs": {
+      "av_latent": [
+        "150",
+        0
+      ]
+    },
+    "class_type": "LTXVSeparateAVLatent",
+    "_meta": {
+      "title": "LTXVSeparateAVLatent"
+    }
+  },
+  "157": {
+    "inputs": {
+      "video_latent": [
+        "162",
+        0
+      ],
+      "audio_latent": [
+        "156",
+        1
+      ]
+    },
+    "class_type": "LTXVConcatAVLatent",
+    "_meta": {
+      "title": "LTXVConcatAVLatent"
+    }
+  },
+  "158": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": 4,
+      "denoise": 0.25000000000000006,
+      "model": [
+        "108",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "160": {
+    "inputs": {
+      "noise": [
+        "151",
+        0
+      ],
+      "guider": [
+        "146",
+        0
+      ],
+      "sampler": [
+        "164",
+        0
+      ],
+      "sigmas": [
+        "158",
+        0
+      ],
+      "latent_image": [
+        "157",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "161": {
+    "inputs": {
+      "samples": [
+        "160",
+        0
+      ],
+      "vae": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "VAEDecodeAudio"
+    }
+  },
+  "162": {
+    "inputs": {
+      "model_name": "minimax_h3_latent_upscaler_3d_conv_v1_fp32.pth",
+      "mode": "megapixels",
+      "align": 32,
+      "device": "cuda",
+      "precision": "fp16",
+      "latent": [
+        "156",
+        0
+      ],
+      "mode.megapixels": [
+        "102",
+        0
+      ],
+      "enable_temporal_chunking": true,
+      "force_unload": true
+    },
+    "class_type": "MinimaxH3LatentUpscaler3D",
+    "_meta": {
+      "title": "MinimaxH3LatentUpscaler3D"
+    }
+  },
+  "164": {
+    "inputs": {
+      "sampler_name": "res_multistep"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "165": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": 8,
+      "denoise": 1,
+      "model": [
+        "108",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "183": {
+    "inputs": {
+      "lora_name": "Cinema-MH3-V02_000010000.safetensors",
+      "strength_model": 1.0000000000000002,
+      "model": [
+        "186",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA-Cinema"
+    }
+  },
+  "186": {
+    "inputs": {
+      "lora_name": "MysticXXX_MMH3-V1.safetensors",
+      "strength_model": 0.5000000000000001,
+      "model": [
+        "120",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoraLoaderModelOnly"
+    }
+  },
+  "190": {
+    "inputs": {
+      "value": "subject_definitions ASTROCINEMAV01K2T:\n<Subject 1> is Mara, the 27-year-old woman defined by <Picture 1>, with a slender oval face, pale olive skin, short asymmetrical silver-black pixie hair, dark-brown eyes, a small scar through her right eyebrow, a slim build, an oversized worn rust-red cardigan, a charcoal medical undersuit, matte black lunar boots, and a thin silver wedding band. Use the large portrait for facial identity and the front, side, and back views for consistent anatomy and costume.\n<Subject 2> is Elias, the domestic android defined by <Picture 2>, with a tall masculine silhouette, a weathered matte-ivory ceramic shell, black articulated joints, short dark synthetic hair, a fine crack across his left cheek, simple charcoal integrated clothing, and expressive amber eyes that turn sterile white only after deletion. Use the large portrait for facial identity and the front, side, and back views for consistent construction and costume.\n<Subject 3> is the empty lunar apartment defined by <Picture 3>, with worn brutalist concrete walls, a panoramic window facing a huge blue Earth above the gray lunar horizon, one warm hanging lamp, a metal table, two empty chairs, two ceramic cups, a kettle, dying plants, shelves, and faded analog photographs. Preserve its layout, materials, and blue-versus-amber lighting while placing the characters naturally into the space.\n\nsummary:\n[reference generation] The target is a 30-second cinematic science-fiction tragedy generated from three references only: <Subject 1> provides Mara's identity and costume, <Subject 2> provides Elias's android design, and <Subject 3> provides the complete environment. Inside the lunar apartment, Mara orders Elias to delete the personality of her dead husband, then discovers that she is also an artificial backup. The reference images guide character and environment continuity without acting as fixed keyframes or shot compositions.\n\nretention_analysis:\n<Subject 1> (appears in [Shot 1] through [Shot 9]): fully_preserved - Mara remains exactly 27 years old and retains the face, pixie hair, eyebrow scar, rust-red cardigan, charcoal undersuit, slim proportions, boots, and wedding ring from <Picture 1>; she appears completely human until her wrist opens in [Shot 8].\n<Subject 2> (appears in [Shot 1], [Shot 3], [Shot 5] through [Shot 9]): fully_preserved - Elias retains the face, ivory ceramic shell, black articulated joints, synthetic hair, cheek crack, charcoal clothing, and body proportions from <Picture 2>; only his eye color and emotional posture change after deletion.\n<Subject 3> (appears in every shot): fully_preserved - the apartment geometry, table, chairs, cups, kettle, window, Earth, concrete surfaces, plants, photographs, and cold-blue versus warm-amber lighting from <Picture 3> remain consistent while camera angle and framing vary by shot.\n\ndetailed_description:\nThe target video uses premium cinematic 3D animation with photoreal materials, restrained adult performances, a 2.39:1 frame, cold lunar blues, worn rust red, aged ivory, and muted amber. Camera movement is slow and deliberate; facial micro-expressions and small hand movements carry the drama. Generate all compositions freely inside the referenced environment rather than reproducing the layout of either character sheet.\n\n[Shot 1] A wide interior view establishes <Subject 3>. Earth fills the panoramic window behind the metal table. <Subject 1> sits rigidly at frame right while <Subject 2> (S1) stands at frame left and places a second cup opposite her. The camera makes a nearly imperceptible push inward. Elias looks toward Mara with warm amber eyes and quietly asks, <d>[English] Tea, my love?</d> Steam curls from the kettle beneath the warm hanging lamp.\n\n[Shot 2] At 00:03.000, cut to a close-up of <Subject 1> (S2). She avoids his gaze, presses her wedding ring against the cup, and says with exhausted restraint, <d>[English] Stop using his voice.</d> Her jaw tightens after the final word while blue Earthlight outlines her silver-black hair.\n\n[Shot 3] At 00:06.500, cut to a medium side view. <Subject 2> slowly kneels beside Mara. A small segmented amber circle becomes visible beneath his ceramic temple. He asks, <d>[English] Delete Elias?</d> The room remains still except for kettle steam.\n\n[Shot 4] At 00:10.000, cut closer on Mara. She finally meets his eyes, gives one tiny nod, and answers, <d>[English] Yes.</d> After a breath, she reaches forward and catches his ceramic hand before he can withdraw it.\n\n[Shot 5] At 00:13.000, cut to an intimate medium close-up. Their clasped hands fill the lower center while their foreheads nearly touch. The camera drifts laterally by only a few centimeters. Elias's segmented temple light steadily extinguishes. Warm, ghostlike reflections of wedding rain, linked hands, and sunlight on Earth glide across their faces and the tabletop without becoming floating screens.\n\n[Shot 6] At 00:17.000, the camera continues into a tight two-shot as the memory reflections fragment into amber dust. <Subject 2> squeezes Mara's hand once. His voice glitches, then breaks with sudden fear: <d>[English] Mara... wait. I remember your funeral.</d> His final amber eye-light collapses to a pinpoint.\n\n[Shot 7] At 00:21.000, hard cut to a centered close-up of Elias. His posture straightens mechanically and both eyes turn sterile white. His hand goes limp in Mara's grasp. In a flat neutral voice he states, <d>[English] Resident profile removed.</d>\n\n[Shot 8] At 00:24.000, cut over Elias's ceramic shoulder toward Mara. <Subject 1> recoils and raises her wrist. A narrow seam opens in otherwise human skin, exposing elegant dark synthetic structure and a small engraved plate reading exactly “MARA_BACKUP_03.” Her breath catches as she whispers, <d>[English] Then... who am I?</d> Elias remains soft in the foreground, watching without recognition; the mechanism is subtle and bloodless.\n\n[Shot 9] At 00:27.500, cut to a static symmetrical wide shot across the table. Two artificial beings sit opposite one another with two untouched cups between them. The warm lamp fades slightly while cold Earthlight overtakes the room. <Subject 2> turns toward Mara like a stranger and says, <d>[English] Good morning, tenant.</d> The kettle gives one piercing whistle at 00:29.700; cut to black exactly at 00:30.000.\n\noverall_soundscape:\nA low lunar-habitat ventilation hum, faint structural ticks, soft fabric movement, ceramic and metal contact, quiet breathing, kettle heating, subtle digital deletion tones, one brief vocal glitch, and the final sharp kettle whistle. Dialogue remains intimate and close-miked with no room echo.\n\nnon_diegetic_music:\nA sparse 54-BPM score begins with isolated felt-piano notes and a nearly inaudible low cello drone. Thin glass harmonics enter during the memory reflections, reverse and decay during Elias's warning, then stop completely when his eyes turn white. No music plays under the final two lines; only the kettle whistle remains.\n"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Prompt"
+    }
+  }
+}
