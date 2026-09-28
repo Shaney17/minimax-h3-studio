@@ -52,6 +52,14 @@ IMAGE_EXT = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
 IMAGE_NODES = ("28", "29", "30")
 TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "SUBMIT_FAILED", "EXPIRED"}
 POLL_SECONDS = 15
+# Seconds the UI may request. MiniMax H3 is trained on 124-362 frames (~5-15 s at
+# 24 fps); node 66 snaps seconds up to its 17k+5 frame grid. 3 s is a smoke test.
+DURATIONS = (3, 5, 8, 10, 12, 15)
+# Per-job limit sent to Runpod. A job policy overrides the endpoint timeout, so
+# keep this equal to the endpoint's execution timeout (60 min on 2026-09-28).
+EXECUTION_TIMEOUT_MS = int(os.environ.get("H3_EXECUTION_TIMEOUT_MS", "3600000"))
+# The TTL also covers queueing and cold starts (pulling the ~43 GB image).
+JOB_TTL_MS = EXECUTION_TIMEOUT_MS + 3_600_000
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 
 SCHEMA = """
@@ -74,7 +82,9 @@ CREATE TABLE IF NOT EXISTS requests (
     workflow TEXT NOT NULL,
     error TEXT,
     video_file TEXT,
-    video_url TEXT
+    video_url TEXT,
+    delay_ms INTEGER,
+    execution_ms INTEGER
 );
 CREATE TABLE IF NOT EXISTS request_images (
     request_id TEXT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
@@ -141,6 +151,9 @@ def init_db() -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(requests)")}
         if "title" not in columns:
             conn.execute("ALTER TABLE requests ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+        for column in ("delay_ms", "execution_ms"):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE requests ADD COLUMN {column} INTEGER")
         for row in conn.execute("SELECT id, prompt FROM requests WHERE title = ''").fetchall():
             conn.execute("UPDATE requests SET title = ? WHERE id = ?", (default_title(row["prompt"]), row["id"]))
     # The database can hold the Runpod API key; keep it private to this user.
@@ -238,6 +251,20 @@ def record_status(job_id: str, result: dict) -> None:
         if not row or row["status"] in TERMINAL_STATES:
             return
         request_id = row["id"]
+        # Runpod reports queue/cold-start and run time in milliseconds.
+        timings = {
+            column: int(result[field])
+            for column, field in (("delay_ms", "delayTime"), ("execution_ms", "executionTime"))
+            if isinstance(result.get(field), (int, float))
+        }
+        if timings:
+            update_request(request_id, **timings)
+        if status == "TIMED_OUT":
+            update_request(request_id, status=status, error=(
+                f"Job vượt giới hạn chạy {EXECUTION_TIMEOUT_MS // 60000} phút và bị Runpod dừng. "
+                "Hãy giảm thời lượng hoặc độ phân giải."
+            ))
+            return
         if status != "COMPLETED":
             error = job_error(result) if status in TERMINAL_STATES else None
             update_request(request_id, status=status, error=error)
@@ -313,6 +340,8 @@ def request_summary(row: sqlite3.Row, images: list[sqlite3.Row], full: bool = Tr
         "error": row["error"],
         "video": video,
         "video_name": row["video_file"],
+        "delay_ms": row["delay_ms"],
+        "execution_ms": row["execution_ms"],
         "images": [
             {"slot": image["slot"], "name": image["original_name"], "mime": image["mime"], "url": f"{base}/images/{image['slot']}"}
             for image in images
@@ -440,7 +469,11 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._json(200, graph)
             return
         if path == "/api/settings":
-            self._json(200, {"api_key": get_saved_key()})
+            self._json(200, {
+                "api_key": get_saved_key(),
+                "durations": DURATIONS,
+                "execution_timeout_min": EXECUTION_TIMEOUT_MS // 60000,
+            })
             return
         if path == "/api/requests":
             query = fold(urllib.parse.parse_qs(self.path.partition("?")[2]).get("q", [""])[0])
@@ -560,13 +593,19 @@ class RequestHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._json(400, {"error": "Request body không phải JSON hợp lệ."})
             return
-        # The title is local metadata only; Runpod receives input and policy.
+        # The title is local metadata only; Runpod receives input and the policy below.
         title = payload.pop("title", "") if isinstance(payload, dict) else ""
         title = title.strip() if isinstance(title, str) else ""
         job_input = payload.get("input") if isinstance(payload, dict) else None
         if not isinstance(job_input, dict) or not isinstance(job_input.get("workflow"), dict) or not isinstance(job_input.get("images"), list):
             self._json(400, {"error": "Thiếu input.workflow hoặc input.images."})
             return
+        duration = job_input["workflow"].get("111", {}).get("inputs", {}).get("value")
+        if duration not in DURATIONS:
+            self._json(400, {"error": f"Thời lượng phải là một trong {', '.join(map(str, DURATIONS))} giây."})
+            return
+        # The server owns the Runpod limits so the endpoint timeout is not undercut.
+        payload["policy"] = {"executionTimeout": EXECUTION_TIMEOUT_MS, "ttl": JOB_TTL_MS}
         attention = job_input["workflow"].get("120")
         if isinstance(attention, dict) and attention.get("class_type") == "ModelAttentionBackend":
             attention.setdefault("inputs", {})["attention"] = "pytorch attention"

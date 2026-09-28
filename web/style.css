@@ -104,6 +104,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;col
 .render-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:18px 0 0 45px}
 .render-options label{display:flex;flex-direction:column;gap:7px;color:#c5d3c8;font-size:11px;font-weight:600}
 .render-options select{width:100%;height:42px;padding:0 12px;border:1px solid #ffffff1d;border-radius:6px;background:var(--field);color:#e2e9df;font-size:12px}
+.timing-hint{margin:12px 0 0 45px;padding:10px 12px;border-radius:6px;background:#243429;border:1px solid #6d8f7755;color:#cfe0d0;font-size:12px;line-height:1.6}
 .render-hint{margin:10px 0 0 45px;color:var(--muted);font-size:11px;line-height:1.6}
 .image-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px;margin-left:45px}
 .image-card{border:1px solid #ffffff15;background:#151f19;border-radius:6px;padding:12px;min-width:0}
@@ -176,7 +177,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;col
   .request-table th:nth-child(3),.request-table td:nth-child(3),.request-table th:nth-child(4),.request-table td:nth-child(4){display:none}
   .title-cell{min-width:160px;max-width:240px}
   .form-panel{padding:0 16px}
-  .field,.render-options,.render-hint,.image-grid,.submit-bar,.form-panel .error-box{margin-left:0}
+  .field,.render-options,.render-hint,.timing-hint,.image-grid,.submit-bar,.form-panel .error-box{margin-left:0}
   .render-options,.image-grid{grid-template-columns:1fr}
   .submit-bar{flex-direction:column;align-items:stretch}
   .detail-images{grid-template-columns:1fr}

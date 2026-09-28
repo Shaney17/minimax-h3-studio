@@ -67,10 +67,12 @@
               <div class="render-options">
                 <label for="duration-seconds">Thời lượng
                   <select id="duration-seconds">
-                    <option value="2">2 giây · thử nhanh</option>
-                    <option value="5" selected>5 giây · đề xuất</option>
-                    <option value="10">10 giây</option>
-                    <option value="30">30 giây · bản gốc</option>
+                    <option value="3">3 giây · chỉ để thử (73 frame)</option>
+                    <option value="5" selected>5 giây · 124 frame</option>
+                    <option value="8">8 giây · 192 frame</option>
+                    <option value="10">10 giây · 243 frame</option>
+                    <option value="12">12 giây · 294 frame</option>
+                    <option value="15">15 giây · tối đa (362 frame)</option>
                   </select>
                 </label>
                 <label for="video-size">Dung lượng video
@@ -86,7 +88,8 @@
                   </select>
                 </label>
               </div>
-              <p class="render-hint">Prompt gốc mô tả 30 giây; hãy chỉnh lời mô tả khi thử đoạn ngắn. Endpoint đang dùng GPU 48 GB, bản 1 MP / 30 giây có thể hết VRAM hoặc vượt giới hạn 20 phút / 8 MB của worker.</p>
+              <p id="timing-hint" class="timing-hint" hidden></p>
+              <p class="render-hint">MiniMax H3 được huấn luyện với video khoảng 5–15 giây (124–362 frame); dài hơn thì chất lượng không được đảm bảo và rất dễ vượt giới hạn thời gian. Với câu chuyện dài, hãy tạo nhiều đoạn ≤15 giây rồi ghép lại. Prompt gốc mô tả 30 giây nên cần rút gọn cho khớp độ dài đã chọn. Video trên 8 MB cần cấu hình S3 cho worker.</p>
             </section>
 
             <section class="step images-step">

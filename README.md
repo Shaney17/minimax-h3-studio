@@ -15,8 +15,12 @@ rebuild.
   for its detail page: progress, video, prompt, and reference images.
 - **Tạo request**: title (defaults to the prompt's first line), the prompt for
   node 190, three reference images for LoadImage nodes 28, 29, and 30, and
-  duration (2/5/10/30 s), MP4 size, and resolution (0.2 MP preview or the
-  original 0.4 MP / 1 MP stages). Defaults: 5 s, compact, 0.2 MP.
+  duration, MP4 size, and resolution (0.2 MP preview or the original
+  0.4 MP / 1 MP stages). Defaults: 5 s, compact, 0.2 MP. Durations are 3 s (a
+  smoke test) and 5, 8, 10, 12, 15 s: MiniMax H3 is trained on 124–362 frames
+  (about 5–15 s at 24 fps), so longer clips are unsupported and easily exceed
+  the time limit. For a longer story, render several ≤15 s shots. The form shows
+  the last measured run time for the chosen duration and resolution.
 - **Cài đặt**: save, test, or delete the Runpod API key. A saved key is required
   to submit, and lets the server keep downloading finished videos after the
   browser is closed.
@@ -94,7 +98,10 @@ the worker, copy its workflow files here and run:
 python3 scripts/check_workflow.py --worker-dir ../minimax-h3-cinematic-runpod
 ```
 
-Each job has a 20-minute execution timeout and a 1-hour TTL. A request is
+The server sets each job's Runpod policy: a 60-minute execution timeout and a
+2-hour TTL (queueing and cold starts included). A per-job policy overrides the
+endpoint's own timeout, so keep `H3_EXECUTION_TIMEOUT_MS` equal to the endpoint
+setting if you change it. Runpod's queue and run times are stored for every job. A request is
 limited to 9.5 MB, and the worker returns MP4s larger than 8 MB only when its S3
 output settings are configured.
 

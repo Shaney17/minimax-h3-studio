@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const NODE_IDS = ["28", "29", "30"];
 const MAX_BODY_BYTES = 9_500_000;
+const DEFAULT_DURATIONS = [3, 5, 8, 10, 12, 15];
 const FINAL_STATES = new Set(["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT", "SUBMIT_FAILED", "EXPIRED"]);
 const STATUS_LABELS = {
   SUBMITTING: "Đang gửi",
@@ -33,6 +34,9 @@ const state = {
   menuItem: null,
   formSource: null,
   route: null,
+  durations: DEFAULT_DURATIONS,
+  timeoutMin: 60,
+  history: [],
 };
 
 /* ---------- helpers ---------- */
@@ -63,6 +67,15 @@ function sizeLabel(bytes) {
 function formatTime(iso) {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "short" });
+}
+
+function formatMs(ms) {
+  if (ms == null) return "—";
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds} giây`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes} phút ${rest} giây` : `${minutes} phút`;
 }
 
 function settingsLabel(item) {
@@ -99,6 +112,8 @@ async function loadSavedKey() {
   try {
     const data = await localJson("/api/settings");
     state.savedKey = data.api_key || "";
+    if (Array.isArray(data.durations) && data.durations.length) state.durations = data.durations;
+    if (data.execution_timeout_min) state.timeoutMin = data.execution_timeout_min;
   } catch {
     state.savedKey = "";
   }
@@ -223,7 +238,10 @@ function renderRow(item) {
   });
   actionCell.append(more);
 
-  row.append(titleCell, statusCell, element("td", "muted nowrap", settingsLabel(item)), videoCell, element("td", "muted nowrap", formatTime(item.created_at)), actionCell);
+  const settingsCell = element("td", "muted nowrap", settingsLabel(item));
+  if (item.execution_ms != null) settingsCell.append(element("span", "row-prompt", `Chạy ${formatMs(item.execution_ms)}`));
+
+  row.append(titleCell, statusCell, settingsCell, videoCell, element("td", "muted nowrap", formatTime(item.created_at)), actionCell);
   return row;
 }
 
@@ -333,6 +351,7 @@ function resetForm() {
   $("duration-seconds").value = "5";
   $("video-size").value = "28";
   $("resolution").value = "0.2";
+  updateTimingHint();
   for (let index = 1; index <= 3; index++) {
     $(`image-${index}`).value = "";
     previewImage(index, null);
@@ -361,11 +380,18 @@ async function fillFromRequest(id) {
     }
     $("title-text").value = `${item.title} (bản sao)`.slice(0, 200);
     setPrompt(item.prompt, true);
-    if (item.duration != null) $("duration-seconds").value = String(Number(item.duration));
+    let durationNote = "";
+    if (item.duration != null) {
+      const wanted = Number(item.duration);
+      const nearest = state.durations.reduce((best, value) => (Math.abs(value - wanted) < Math.abs(best - wanted) ? value : best));
+      $("duration-seconds").value = String(nearest);
+      if (nearest !== wanted) durationNote = ` Thời lượng ${wanted} giây không còn được hỗ trợ nên đã đổi sang ${nearest} giây.`;
+    }
     if (item.crf != null) $("video-size").value = String(Number(item.crf));
     if (item.resolution != null) $("resolution").value = String(Number(item.resolution));
     state.formSource = id;
-    showBox("copy-banner", `Đã sao chép tiêu đề, prompt, thông số và 3 ảnh từ “${item.title}”. Chỉnh sửa nếu cần rồi bấm Gửi request.`);
+    showBox("copy-banner", `Đã sao chép tiêu đề, prompt, thông số và 3 ảnh từ “${item.title}”. Chỉnh sửa nếu cần rồi bấm Gửi request.${durationNote}`);
+    updateTimingHint();
   } catch (error) {
     showBox("copy-banner", "");
     showBox("form-error", error.message || "Không sao chép được request.");
@@ -389,7 +415,7 @@ async function buildRequest() {
   const duration = Number($("duration-seconds").value);
   const crf = Number($("video-size").value);
   const resolution = Number($("resolution").value);
-  if (![2, 5, 10, 30].includes(duration) || ![15, 28].includes(crf) || ![0.2, 1].includes(resolution)) {
+  if (!state.durations.includes(duration) || ![15, 28].includes(crf) || ![0.2, 1].includes(resolution)) {
     throw new Error("Thiết lập video không hợp lệ.");
   }
   graph["111"].inputs.value = duration;
@@ -410,12 +436,41 @@ async function buildRequest() {
   const body = JSON.stringify({
     title: $("title-text").value.trim(),
     input: { workflow: graph, images },
-    policy: { executionTimeout: 1_200_000, ttl: 3_600_000 },
   });
   if (new TextEncoder().encode(body).length > MAX_BODY_BYTES) {
     throw new Error("Ba ảnh và workflow vượt giới hạn 9,5 MB. Hãy giảm kích thước ảnh rồi thử lại.");
   }
   return body;
+}
+
+async function loadTimingHistory() {
+  try {
+    state.history = await localJson("/api/requests");
+  } catch {
+    state.history = [];
+  }
+  updateTimingHint();
+}
+
+function updateTimingHint() {
+  const duration = Number($("duration-seconds").value);
+  const resolution = Number($("resolution").value);
+  const same = state.history.filter((item) => Number(item.duration) === duration && Number(item.resolution) === resolution);
+  const measured = same.find((item) => item.status === "COMPLETED" && item.execution_ms != null);
+  const timedOut = same.find((item) => item.status === "TIMED_OUT");
+  const label = `${duration} giây · ${resolution === 0.2 ? "0,2 MP" : "1 MP"}`;
+  let text;
+  if (measured) {
+    text = `Lần gần nhất với ${label}: chạy ${formatMs(measured.execution_ms)}` +
+      (measured.delay_ms != null ? `, chờ worker ${formatMs(measured.delay_ms)}.` : ".");
+  } else {
+    text = `Chưa có số đo cho ${label}. Hãy thử cấu hình ngắn hơn trước để ước lượng.`;
+  }
+  if (timedOut && (!measured || timedOut.created_at > measured.created_at)) {
+    text += ` Lưu ý: một request ${label} trước đó đã vượt giới hạn.`;
+  }
+  $("timing-hint").textContent = `${text} Giới hạn mỗi job: ${state.timeoutMin} phút.`;
+  $("timing-hint").hidden = false;
 }
 
 async function submitRequest(event) {
@@ -518,6 +573,8 @@ function renderDetail(item) {
     ["Request ID", item.id],
     ["Runpod Job ID", item.job_id || "—"],
     ["API key", item.key_hint || "—"],
+    ["Chờ worker", formatMs(item.delay_ms)],
+    ["Thời gian chạy", formatMs(item.execution_ms)],
     ["Tạo lúc", formatTime(item.created_at)],
     ["Cập nhật", formatTime(item.updated_at)],
   ];
@@ -561,6 +618,7 @@ function route() {
     if (current.from) fillFromRequest(current.from);
     else if (state.formSource) resetForm();
     updateKeyBadge();
+    loadTimingHistory();
   } else if (current.name === "detail") {
     document.title = "Chi tiết request · MiniMax H3 Studio";
     state.detail = null;
@@ -610,6 +668,8 @@ for (let index = 1; index <= 3; index++) {
 }
 $("prompt-text").addEventListener("input", () => { state.promptTouched = true; updatePromptCount(); });
 $("reset-prompt").addEventListener("click", () => setPrompt(state.defaultPrompt, false));
+$("duration-seconds").addEventListener("change", updateTimingHint);
+$("resolution").addEventListener("change", updateTimingHint);
 
 $("detail-copy").addEventListener("click", () => { if (state.detail) location.hash = `#/new?from=${state.detail.id}`; });
 $("detail-delete").addEventListener("click", async () => {
