@@ -32,8 +32,9 @@ Each request is independent, so consecutive shots do not join by themselves.
 **Tiếp nối cảnh** (on a finished request's page or in the row's ⋯ menu) starts
 the next shot from the exact last frame of the previous video:
 
-1. It copies the prompt, settings, and the three subject images, and extracts
-   the video's final frame in the browser (no ffmpeg needed on the host).
+1. It copies the prompt, settings, and the three subject images, and takes the
+   video's exact final frame with ffmpeg on the host
+   (`GET /api/requests/<id>/last-frame`).
 2. The frame is sent as a fourth image, `<Picture 4>`. The request adds three
    nodes to the workflow: `LoadImage` 300, and `MiniMaxH3AddGuide` 301/302 that
    anchor it at frame 0 of stage 1 (base latent, node 121) and stage 2 (upscaled
@@ -55,6 +56,34 @@ current image. Whether this community hybrid FL2VA/Ref2VA checkpoint honours
 references and a keyframe together as well as the official Ref2VA model does is
 still to be measured.
 
+## Long films (Phim dài)
+
+**Phim dài** turns a list of scenes into one video without keeping a browser
+open. The user splits the story; the server does the rest:
+
+1. Enter the three reference images, the shared `subject_definitions`, a style
+   sentence, default ambience and music, resolution and MP4 size, then add
+   scenes (3–15 s each, 5 s by default) with an English description and optional
+   per-scene sound.
+2. **Bắt đầu tạo phim** renders the scenes one after another. For each scene the
+   server builds the six-field Ref2VA prompt (shared definitions, a summary,
+   retention lines, style + description, sound); from scene 2 on it adds the
+   `<Picture 4>` anchor wording and anchors frame 0 to the previous scene's last
+   frame (ffmpeg). The scene description should open in that same state.
+3. A failed scene is submitted once more; a second failure pauses the film with
+   the error, and **Thử lại** continues from that scene. **Dừng** pauses after the
+   current job (which still finishes on Runpod).
+4. When all scenes are done, ffmpeg joins them into `film.mp4`, dropping the
+   repeated first frame of every scene after the first.
+
+Finished and running scenes are locked. Later scenes can be edited, reordered,
+or added while the film is paused, failed, or finished; adding scenes to a
+finished film renders only the new ones and joins the film again. Each scene is
+also a normal request in **Requests**, and its page shows the exact prompt sent.
+
+Rendering is sequential because each scene needs the previous video, so a film
+takes about the sum of its scenes' run times plus queueing.
+
 ## Hosting on another machine (private, over Tailscale)
 
 The server only listens on `127.0.0.1`. `tailscale serve` publishes it as
@@ -64,8 +93,9 @@ never enabled, so nothing is reachable from the internet or the local network.
 Requirements on the host: macOS or Linux, `git`, and Tailscale signed in to your
 tailnet with MagicDNS and HTTPS Certificates enabled
 (<https://login.tailscale.com/admin/dns>). The install script installs Python
-3.10+ if needed (Homebrew on macOS, apt/dnf on Linux); the app has no other
-dependencies.
+3.10+ and ffmpeg if needed (Homebrew on macOS, apt/dnf on Linux); the app has
+no other dependencies. The service gets ffmpeg's directory on its `PATH`, since
+launchd and systemd start services with a minimal one.
 
 First install, on the host:
 
@@ -110,7 +140,8 @@ Everything is stored on the host under `data/` (ignored by Git):
 | Item | Location |
 |---|---|
 | Title, prompt, settings, full workflow, job ID, status, errors | `data/studio.db` (SQLite) |
-| Reference images and returned MP4 | `data/requests/<request id>/` |
+| Reference images, returned MP4, and cached last frame | `data/requests/<request id>/` |
+| Film reference images and the joined `film.mp4` | `data/projects/<film id>/` |
 | Runpod API key | `data/studio.db`, created with owner-only permissions |
 
 Every device in your tailnet can open the studio and use the saved key; there is

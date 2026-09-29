@@ -14,6 +14,7 @@
         <nav class="nav" aria-label="Điều hướng chính">
           <a href="#/requests" data-nav="requests"><span class="nav-icon" aria-hidden="true">☰</span>Requests</a>
           <a href="#/new" data-nav="new"><span class="nav-icon" aria-hidden="true">＋</span>Tạo request</a>
+          <a href="#/films" data-nav="films"><span class="nav-icon" aria-hidden="true">▶</span>Phim dài</a>
           <a href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">⚙</span>Cài đặt</a>
         </nav>
         <div class="sidebar-foot">
@@ -179,6 +180,107 @@
               <div class="panel detail-card"><h2>Thông tin</h2><dl id="detail-info" class="detail-info"></dl></div>
             </div>
           </div>
+        </section>
+
+        <!-- Film list -->
+        <section id="view-films" class="view" hidden>
+          <header class="page-head">
+            <div><div class="eyebrow">NHIỀU PHÂN CẢNH</div><h1>Phim dài</h1></div>
+            <a class="primary-button" href="#/films/new">＋ Phim mới</a>
+          </header>
+          <p class="page-intro">Nhập nhân vật và từng phân cảnh. Hệ thống tạo lần lượt từng cảnh, lấy khung cuối của cảnh trước làm khung đầu cho cảnh sau, rồi ghép tất cả thành một video. Việc tạo chạy trên máy chủ, không cần giữ trang này mở.</p>
+          <div class="panel table-panel">
+            <table class="request-table">
+              <thead><tr><th>Tên phim</th><th>Trạng thái</th><th>Tiến độ</th><th>Thời lượng</th><th>Cập nhật ↓</th></tr></thead>
+              <tbody id="film-rows"></tbody>
+            </table>
+            <div id="films-empty" class="empty" hidden></div>
+          </div>
+        </section>
+
+        <!-- Film editor and progress -->
+        <section id="view-film" class="view" hidden>
+          <header class="page-head">
+            <div><a class="back-link" href="#/films">← Phim dài</a><h1 id="film-heading">Phim mới</h1><div id="film-meta" class="detail-meta"></div></div>
+            <div class="head-actions">
+              <button id="film-start" type="button" class="primary-button">▶ Bắt đầu tạo phim</button>
+              <button id="film-stop" type="button" class="small-button" hidden>Dừng</button>
+              <button id="film-save" type="button" class="small-button">Lưu nháp</button>
+              <button id="film-delete" type="button" class="small-button danger" hidden>Xoá</button>
+            </div>
+          </header>
+
+          <div id="film-progress" class="panel film-progress" hidden>
+            <div class="film-progress-head"><h2>Tiến độ</h2><span id="film-progress-label" class="muted"></span></div>
+            <div class="progress-track"><span id="film-progress-fill"></span></div>
+            <p id="film-progress-text" class="muted"></p>
+            <div id="film-error" class="error-box" hidden></div>
+            <div id="film-result" class="film-result" hidden>
+              <video id="film-video" controls playsinline preload="metadata"></video>
+              <a id="film-download" class="download-button" href="#" download>Tải phim MP4 ↓</a>
+            </div>
+          </div>
+
+          <div id="film-form-error" class="error-box" hidden></div>
+          <form id="film-form" class="panel form-panel" novalidate>
+            <section class="step">
+              <div class="step-head"><span class="step-number">01</span><div><h2>Thông tin phim</h2><p>Độ phân giải và dung lượng áp dụng cho mọi cảnh.</p></div></div>
+              <div class="field"><label class="sr-only" for="film-title">Tên phim</label><input id="film-title" type="text" maxlength="200" placeholder="Tên phim" autocomplete="off" /></div>
+              <div class="render-options film-options">
+                <label for="film-resolution">Độ phân giải
+                  <select id="film-resolution"><option value="0.2" selected>Thử nhanh · 0,2 MP</option><option value="1">Workflow gốc · 1 MP</option></select>
+                </label>
+                <label for="film-size">Dung lượng video
+                  <select id="film-size"><option value="28" selected>Gọn · đề xuất</option><option value="15">Chất lượng gốc</option></select>
+                </label>
+              </div>
+            </section>
+
+            <section class="step">
+              <div class="step-head"><span class="step-number">02</span><div><h2>Nhân vật &amp; bối cảnh</h2><p>Dùng chung cho mọi cảnh để nhân vật ổn định. Không sửa được sau khi phim đã bắt đầu.</p></div></div>
+              <div class="image-grid">
+                <div class="image-card">
+                  <div class="image-card-head"><span class="image-index">I</span><div><h3>&lt;Picture 1&gt;</h3><p>Thường là nhân vật 1</p></div></div>
+                  <label class="image-drop" for="film-image-1"><input id="film-image-1" type="file" accept="image/png,image/jpeg,image/webp" /><img id="film-preview-1" alt="Ảnh tham chiếu 1" hidden /><span id="film-label-1" class="image-placeholder"><span>＋</span> Chọn ảnh</span></label>
+                  <div id="film-meta-1" class="image-meta">PNG, JPG hoặc WebP</div>
+                </div>
+                <div class="image-card">
+                  <div class="image-card-head"><span class="image-index">II</span><div><h3>&lt;Picture 2&gt;</h3><p>Thường là nhân vật 2</p></div></div>
+                  <label class="image-drop" for="film-image-2"><input id="film-image-2" type="file" accept="image/png,image/jpeg,image/webp" /><img id="film-preview-2" alt="Ảnh tham chiếu 2" hidden /><span id="film-label-2" class="image-placeholder"><span>＋</span> Chọn ảnh</span></label>
+                  <div id="film-meta-2" class="image-meta">PNG, JPG hoặc WebP</div>
+                </div>
+                <div class="image-card">
+                  <div class="image-card-head"><span class="image-index">III</span><div><h3>&lt;Picture 3&gt;</h3><p>Thường là bối cảnh</p></div></div>
+                  <label class="image-drop" for="film-image-3"><input id="film-image-3" type="file" accept="image/png,image/jpeg,image/webp" /><img id="film-preview-3" alt="Ảnh tham chiếu 3" hidden /><span id="film-label-3" class="image-placeholder"><span>＋</span> Chọn ảnh</span></label>
+                  <div id="film-meta-3" class="image-meta">PNG, JPG hoặc WebP</div>
+                </div>
+              </div>
+              <div class="field film-field">
+                <label for="film-subjects">Mô tả nhân vật và bối cảnh (<code>subject_definitions</code>, tiếng Anh)</label>
+                <textarea id="film-subjects" rows="8" spellcheck="false"></textarea>
+                <p class="field-hint">Mỗi dòng một <code>&lt;Subject N&gt;</code>, nói rõ ảnh nguồn <code>&lt;Picture 1–3&gt;</code>. <code>&lt;Picture 4&gt;</code> được dành cho khung nối giữa các cảnh.</p>
+              </div>
+              <div class="field film-field">
+                <label for="film-style">Phong cách hình ảnh (câu mở đầu của mô tả, dùng cho mọi cảnh)</label>
+                <textarea id="film-style" rows="3" spellcheck="false"></textarea>
+              </div>
+            </section>
+
+            <section class="step">
+              <div class="step-head"><span class="step-number">03</span><div><h2>Âm thanh mặc định</h2><p>Dùng cho các cảnh không có âm thanh riêng. Giữ nhất quán để chỗ nối không bị nhảy tiếng.</p></div></div>
+              <div class="field film-field"><label for="film-soundscape">Âm thanh nền (<code>overall_soundscape</code>)</label><textarea id="film-soundscape" rows="3" spellcheck="false"></textarea></div>
+              <div class="field film-field"><label for="film-music">Nhạc nền (<code>non_diegetic_music</code>, ghi N/A nếu không có)</label><textarea id="film-music" rows="3" spellcheck="false"></textarea></div>
+            </section>
+
+            <section class="step">
+              <div class="step-head"><span class="step-number">04</span><div><h2>Phân cảnh</h2><p>Mỗi cảnh là một lần tạo video. Cảnh 2 trở đi tự bắt đầu từ khung cuối của cảnh trước; hãy mở đầu mô tả bằng đúng trạng thái đó.</p></div></div>
+              <div id="film-scenes" class="film-scenes"></div>
+              <div class="film-scene-actions">
+                <button id="film-add-scene" type="button" class="small-button">＋ Thêm phân cảnh</button>
+                <span id="film-total" class="muted"></span>
+              </div>
+            </section>
+          </form>
         </section>
 
         <!-- Settings -->

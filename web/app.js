@@ -48,6 +48,11 @@ const state = {
   continuesFrom: null,
   chainFor: null,
   chain: [],
+  film: null,
+  filmScenes: [],
+  filmImages: [null, null, null],
+  filmTemplate: null,
+  filmTimer: null,
 };
 
 /* ---------- helpers ---------- */
@@ -110,38 +115,14 @@ function showBox(id, message) {
   $(id).hidden = !message;
 }
 
-function waitFor(target, event, ms = 30000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Hết thời gian đọc video.")), ms);
-    target.addEventListener(event, () => { clearTimeout(timer); resolve(); }, { once: true });
-    target.addEventListener("error", () => { clearTimeout(timer); reject(new Error("Trình duyệt không đọc được video.")); }, { once: true });
-  });
-}
-
-/** Grab the final frame of a stored (same-origin) video as a PNG file. */
-async function extractLastFrame(url, name) {
-  const video = document.createElement("video");
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = "auto";
-  video.src = url;
-  try {
-    await waitFor(video, "loadeddata");
-    if (!Number.isFinite(video.duration)) throw new Error("Không xác định được độ dài video.");
-    // Seek just inside the end so the decoder shows the last frame.
-    video.currentTime = Math.max(0, video.duration - 0.01);
-    await waitFor(video, "seeked");
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d").drawImage(video, 0, 0);
-    const blob = await new Promise((resolve, reject) =>
-      canvas.toBlob((result) => (result ? resolve(result) : reject(new Error("Không tạo được ảnh khung cuối."))), "image/png"));
-    return new File([blob], name, { type: "image/png" });
-  } finally {
-    video.removeAttribute("src");
-    video.load();
+/** The final frame of a request's stored video, extracted by ffmpeg on the server. */
+async function fetchLastFrame(requestId) {
+  const response = await fetch(`/api/requests/${requestId}/last-frame`);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `Không lấy được khung cuối (HTTP ${response.status}).`);
   }
+  return new File([await response.blob()], `last_frame_${requestId.slice(0, 8)}.png`, { type: "image/png" });
 }
 
 /**
@@ -511,7 +492,7 @@ async function useRequestAsAnchor(id) {
   const item = state.history.find((entry) => entry.id === id) || await localJson(`/api/requests/${encodeURIComponent(id)}`);
   if (!item.video_name) throw new Error("Request này không có video lưu trên máy nên không lấy được khung cuối.");
   $("anchor-meta").textContent = "Đang lấy khung cuối của video…";
-  const file = await extractLastFrame(`/api/requests/${item.id}/video`, `last_frame_${item.id.slice(0, 8)}.png`);
+  const file = await fetchLastFrame(item.id);
   if (seq !== state.anchorSeq) return;
   setAnchorFile(file, item.id);
   $("anchor-file").value = "";
@@ -867,6 +848,358 @@ function playChain() {
   video.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
+/* ---------- films ---------- */
+
+const FILM_STATUS = { DRAFT: "Nháp", RUNNING: "Đang tạo", PAUSED: "Tạm dừng", FAILED: "Lỗi", COMPLETED: "Hoàn tất" };
+
+function filmBadge(status) {
+  const badge = element("span", "status-badge", FILM_STATUS[status] || status);
+  badge.classList.add({ COMPLETED: "ok", FAILED: "bad", RUNNING: "live" }[status] || "draft");
+  return badge;
+}
+
+function filmDone(film) {
+  return film.status === "COMPLETED" ? film.scene_count : Math.min(film.current_index, film.scene_count);
+}
+
+function durationLabel(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  return minutes ? `${seconds} giây (${minutes} phút ${seconds % 60} giây)` : `${seconds} giây`;
+}
+
+async function loadFilms() {
+  clearTimeout(state.filmTimer);
+  try {
+    const films = await localJson("/api/projects");
+    if (state.route?.name !== "films") return;
+    $("film-rows").replaceChildren(...films.map((film) => {
+      const row = element("tr");
+      row.tabIndex = 0;
+      const open = () => { location.hash = `#/films/${film.id}`; };
+      row.addEventListener("click", (event) => { if (!event.target.closest("a")) open(); });
+      row.addEventListener("keydown", (event) => { if (event.key === "Enter") open(); });
+      const titleCell = element("td", "title-cell");
+      const link = element("a", "row-title", film.title);
+      link.href = `#/films/${film.id}`;
+      titleCell.append(link);
+      if (film.error) titleCell.append(element("span", "row-prompt", film.error));
+      const statusCell = element("td");
+      statusCell.append(filmBadge(film.status));
+      row.append(titleCell, statusCell, element("td", "muted nowrap", `${filmDone(film)}/${film.scene_count} cảnh`),
+        element("td", "muted nowrap", durationLabel(film.total_duration)), element("td", "muted nowrap", formatTime(film.updated_at)));
+      return row;
+    }));
+    const empty = $("films-empty");
+    empty.hidden = films.length > 0;
+    if (!films.length) {
+      const link = element("a", "primary-button", "＋ Tạo phim đầu tiên");
+      link.href = "#/films/new";
+      empty.replaceChildren(element("p", "", "Chưa có phim nào."), link);
+    }
+    if (films.some((film) => film.status === "RUNNING")) state.filmTimer = setTimeout(loadFilms, 5000);
+  } catch (error) {
+    $("film-rows").replaceChildren();
+    $("films-empty").hidden = false;
+    $("films-empty").textContent = `Không tải được danh sách phim: ${error.message}`;
+  }
+}
+
+function newFilmScene() {
+  return { duration: 5, description: "", soundscape: "", music: "" };
+}
+
+function setFilmPreview(slot, url, label) {
+  const img = $(`film-preview-${slot}`);
+  img.hidden = !url;
+  if (url) img.src = url;
+  else img.removeAttribute("src");
+  $(`film-label-${slot}`).hidden = Boolean(url);
+  $(`film-meta-${slot}`).textContent = label || "PNG, JPG hoặc WebP";
+}
+
+function fillFilmForm(film, template) {
+  const source = film || template;
+  $("film-title").value = film?.title || "";
+  $("film-resolution").value = String(film ? Number(film.resolution) : 0.2);
+  $("film-size").value = String(film ? film.crf : 28);
+  for (const field of ["subjects", "style", "soundscape", "music"]) $(`film-${field}`).value = source?.[field] || "";
+  state.filmImages = [null, null, null];
+  for (let slot = 1; slot <= 3; slot++) {
+    $(`film-image-${slot}`).value = "";
+    const image = film?.images.find((entry) => entry.slot === slot);
+    setFilmPreview(slot, image?.url, image?.name);
+  }
+  state.filmScenes = film ? film.scenes.map((scene) => ({ ...scene })) : [newFilmScene()];
+}
+
+async function openNewFilm() {
+  state.film = null;
+  showBox("film-form-error", "");
+  try {
+    state.filmTemplate ||= await localJson("/api/project-template");
+  } catch {
+    state.filmTemplate = null;
+  }
+  if (state.route?.name !== "film" || state.route.id) return;
+  fillFilmForm(null, state.filmTemplate);
+  renderFilm();
+}
+
+async function loadFilm(id) {
+  clearTimeout(state.filmTimer);
+  try {
+    const film = await localJson(`/api/projects/${id}`);
+    if (state.route?.name !== "film" || state.route.id !== id) return;
+    // Keep unsaved edits when the page just re-polls a film that is not running.
+    const refill = state.film?.id !== id || film.status === "RUNNING" || state.film?.status === "RUNNING";
+    state.film = film;
+    if (refill) fillFilmForm(film);
+    else state.filmScenes.forEach((scene, index) => Object.assign(scene, {
+      request: film.scenes[index]?.request, prompt: film.scenes[index]?.prompt, attempts: film.scenes[index]?.attempts,
+    }));
+    renderFilm();
+    if (film.status === "RUNNING") state.filmTimer = setTimeout(() => loadFilm(id), 5000);
+  } catch (error) {
+    if (state.route?.name !== "film") return;
+    $("film-heading").textContent = "Không tải được phim";
+    showBox("film-form-error", error.message);
+  }
+}
+
+function filmLocks() {
+  const film = state.film;
+  const running = film?.status === "RUNNING";
+  const started = Boolean(film) && (film.status !== "DRAFT" || film.locked_scenes > 0);
+  return { running, started, lockedScenes: running ? Infinity : film?.locked_scenes || 0 };
+}
+
+function renderFilm() {
+  const film = state.film;
+  const { running, started } = filmLocks();
+  $("film-heading").textContent = film?.title || "Phim mới";
+  document.title = `${film?.title || "Phim mới"} · MiniMax H3 Studio`;
+  $("film-meta").replaceChildren(...(film ? [filmBadge(film.status), element("span", "", `${film.scene_count} cảnh · ${durationLabel(film.total_duration)}`)] : []));
+
+  const canStart = !film || ["DRAFT", "PAUSED", "FAILED"].includes(film.status);
+  $("film-start").hidden = !canStart;
+  $("film-start").textContent = !film || film.status === "DRAFT" ? "▶ Bắt đầu tạo phim"
+    : film.status === "FAILED" ? `↻ Thử lại từ cảnh ${film.current_index + 1}` : "▶ Tiếp tục";
+  $("film-stop").hidden = !running;
+  $("film-save").hidden = running;
+  $("film-save").textContent = !film || film.status === "DRAFT" ? "Lưu nháp" : "Lưu thay đổi";
+  $("film-delete").hidden = !film || running;
+
+  const progress = $("film-progress");
+  progress.hidden = !film || film.status === "DRAFT";
+  if (film && film.status !== "DRAFT") {
+    const done = filmDone(film);
+    $("film-progress-label").textContent = `${done}/${film.scene_count} cảnh`;
+    $("film-progress-fill").style.width = `${film.scene_count ? Math.round((done / film.scene_count) * 100) : 0}%`;
+    const current = film.scenes[film.current_index];
+    const currentStatus = current?.request ? STATUS_LABELS[current.request.status] || current.request.status : "Đang chuẩn bị";
+    $("film-progress-text").textContent = {
+      RUNNING: film.current_index >= film.scene_count ? "Đang ghép các cảnh thành một video…"
+        : `Đang tạo cảnh ${film.current_index + 1}/${film.scene_count}: ${currentStatus}. Có thể đóng trang, máy chủ vẫn tiếp tục.`,
+      PAUSED: "Đã tạm dừng. Job đang chạy dở (nếu có) vẫn chạy xong trên Runpod; bấm Tiếp tục để làm tiếp.",
+      FAILED: "Phim dừng vì lỗi. Sửa phân cảnh nếu cần rồi bấm Thử lại.",
+      COMPLETED: "Phim đã ghép xong.",
+    }[film.status] || "";
+    showBox("film-error", film.error || "");
+    $("film-result").hidden = !film.film;
+    if (film.film && $("film-video").getAttribute("src") !== `${film.film}?v=${film.updated_at}`) {
+      $("film-video").src = `${film.film}?v=${film.updated_at}`;
+      $("film-download").href = film.film;
+      $("film-download").download = `${film.title.replace(/[\\/:*?"<>|]+/g, "_")}.mp4`;
+    }
+  }
+
+  for (const id of ["film-subjects", "film-style", "film-soundscape", "film-music", "film-resolution", "film-size"]) $(id).disabled = started || running;
+  $("film-title").disabled = running;
+  for (let slot = 1; slot <= 3; slot++) $(`film-image-${slot}`).disabled = started || running;
+  $("film-add-scene").disabled = running;
+  renderFilmScenes();
+}
+
+function syncFilmScenes() {
+  document.querySelectorAll("#film-scenes .film-scene").forEach((card) => {
+    const scene = state.filmScenes[Number(card.dataset.index)];
+    if (!scene || card.classList.contains("locked")) return;
+    scene.duration = Number(card.querySelector("select").value);
+    for (const field of ["description", "soundscape", "music"]) scene[field] = card.querySelector(`[data-field="${field}"]`).value;
+  });
+}
+
+function renderFilmScenes() {
+  const { lockedScenes } = filmLocks();
+  const total = state.filmScenes.reduce((sum, scene) => sum + Number(scene.duration), 0);
+  $("film-total").textContent = `${state.filmScenes.length} cảnh · tổng ${durationLabel(total)}`;
+  $("film-scenes").replaceChildren(...state.filmScenes.map((scene, index) => {
+    const locked = index < lockedScenes;
+    const card = element("div", `film-scene${locked ? " locked" : ""}`);
+    card.dataset.index = index;
+
+    const head = element("div", "film-scene-head");
+    head.append(element("b", "", `Cảnh ${index + 1}`));
+    const duration = element("select");
+    duration.setAttribute("aria-label", `Thời lượng cảnh ${index + 1}`);
+    for (const value of state.durations) {
+      const option = element("option", "", `${value} giây`);
+      option.value = String(value);
+      duration.append(option);
+    }
+    duration.value = String(scene.duration);
+    duration.disabled = locked;
+    duration.addEventListener("change", () => { syncFilmScenes(); renderFilmScenes(); });
+    head.append(duration);
+    if (scene.request) {
+      head.append(statusBadge(scene.request.status));
+      if (scene.request.execution_ms != null) head.append(element("span", "muted", `chạy ${formatMs(scene.request.execution_ms)}`));
+      if (scene.attempts > 1) head.append(element("span", "muted", `lần thử ${scene.attempts}`));
+    }
+    const tools = element("span", "film-scene-tools");
+    const tool = (label, title, disabled, action) => {
+      const button = element("button", "icon-button", label);
+      button.type = "button";
+      button.title = title;
+      button.setAttribute("aria-label", `${title} cảnh ${index + 1}`);
+      button.disabled = disabled;
+      button.addEventListener("click", () => { syncFilmScenes(); action(); renderFilmScenes(); });
+      return button;
+    };
+    const scenes = state.filmScenes;
+    tools.append(
+      tool("↑", "Đưa lên", locked || index === 0 || index - 1 < lockedScenes, () => scenes.splice(index - 1, 0, scenes.splice(index, 1)[0])),
+      tool("↓", "Đưa xuống", locked || index === scenes.length - 1, () => scenes.splice(index + 1, 0, scenes.splice(index, 1)[0])),
+      tool("✕", "Xoá", locked || scenes.length === 1, () => scenes.splice(index, 1)),
+    );
+    head.append(tools);
+
+    const description = element("textarea");
+    description.dataset.field = "description";
+    description.rows = 5;
+    description.spellcheck = false;
+    description.value = scene.description;
+    description.disabled = locked;
+    description.placeholder = index === 0
+      ? "[Shot 1] Mô tả cảnh mở đầu bằng tiếng Anh: khung hình, nhân vật, hành động, góc máy, thoại <d>[English] …</d>"
+      : "[Shot 1] Mở đầu đúng trạng thái cuối của cảnh trước (vị trí, tư thế, ánh sáng, góc máy), rồi mô tả hành động tiếp theo bằng tiếng Anh.";
+    description.setAttribute("aria-label", `Mô tả cảnh ${index + 1}`);
+
+    const sound = element("details", "film-scene-extra");
+    sound.append(element("summary", "", scene.soundscape || scene.music ? "Âm thanh riêng cho cảnh này (đang dùng)" : "Âm thanh riêng cho cảnh này"));
+    for (const [field, label] of [["soundscape", "Âm thanh nền"], ["music", "Nhạc nền"]]) {
+      const input = element("textarea");
+      input.dataset.field = field;
+      input.rows = 2;
+      input.value = scene[field] || "";
+      input.disabled = locked;
+      input.placeholder = `${label}: để trống để dùng mặc định của phim`;
+      input.setAttribute("aria-label", `${label} cảnh ${index + 1}`);
+      sound.append(input);
+    }
+    card.append(head, description, sound);
+
+    if (scene.prompt) {
+      const preview = element("details", "film-scene-extra");
+      preview.append(element("summary", "", "Xem prompt gửi đi"), element("pre", "detail-prompt", scene.prompt));
+      card.append(preview);
+    }
+    if (scene.request) {
+      const media = element("div", "film-scene-media");
+      if (scene.request.video) {
+        const video = element("video");
+        video.controls = true;
+        video.preload = "none";
+        video.src = scene.request.video;
+        media.append(video);
+      }
+      if (scene.request.error && scene.request.status !== "COMPLETED") {
+        media.append(element("p", "history-error", scene.request.error));
+      }
+      const link = element("a", "text-link", "Mở request →");
+      link.href = `#/requests/${scene.request.id}`;
+      media.append(link);
+      card.append(media);
+    }
+    return card;
+  }));
+}
+
+async function readFilmBody() {
+  syncFilmScenes();
+  const film = state.film;
+  const images = [];
+  for (let slot = 1; slot <= 3; slot++) {
+    const file = state.filmImages[slot - 1];
+    if (file) images.push({ slot, name: file.name, image: await toDataUrl(file) });
+  }
+  if (!film && images.length < 3) throw new Error("Hãy chọn đủ 3 ảnh tham chiếu.");
+  const body = {
+    title: $("film-title").value.trim(),
+    subjects: $("film-subjects").value, style: $("film-style").value,
+    soundscape: $("film-soundscape").value, music: $("film-music").value,
+    crf: Number($("film-size").value), resolution: Number($("film-resolution").value),
+    images,
+    scenes: state.filmScenes.map(({ duration, description, soundscape, music }) => ({ duration: Number(duration), description, soundscape, music })),
+  };
+  const blank = body.scenes.findIndex((scene) => !scene.description.trim());
+  if (blank >= 0) throw new Error(`Cảnh ${blank + 1} chưa có mô tả.`);
+  if (new TextEncoder().encode(JSON.stringify(body)).length > MAX_BODY_BYTES) {
+    throw new Error("Ảnh tham chiếu quá lớn (giới hạn 9,5 MB). Hãy giảm kích thước ảnh.");
+  }
+  return body;
+}
+
+async function saveFilm() {
+  const body = await readFilmBody();
+  const film = state.film;
+  const saved = await localJson(film ? `/api/projects/${film.id}` : "/api/projects", {
+    method: film ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  state.film = saved;
+  fillFilmForm(saved);
+  if (!film) history.replaceState(null, "", `#/films/${saved.id}`);
+  state.route = { name: "film", id: saved.id };
+  renderFilm();
+  return saved;
+}
+
+async function filmAction(button, work) {
+  showBox("film-form-error", "");
+  button.disabled = true;
+  try {
+    await work();
+  } catch (error) {
+    showBox("film-form-error", error.message || "Thao tác không thành công.");
+    $("film-form-error").scrollIntoView({ behavior: "smooth", block: "center" });
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function startFilm() {
+  if (!state.savedKey) throw new Error("Chưa có Runpod API key. Vào Cài đặt để lưu key trước.");
+  const film = await saveFilm();
+  state.film = await localJson(`/api/projects/${film.id}/start`, { method: "POST" });
+  renderFilm();
+  clearTimeout(state.filmTimer);
+  state.filmTimer = setTimeout(() => loadFilm(film.id), 3000);
+}
+
+async function stopFilm() {
+  state.film = await localJson(`/api/projects/${state.film.id}/stop`, { method: "POST" });
+  clearTimeout(state.filmTimer);
+  fillFilmForm(state.film);
+  renderFilm();
+}
+
+async function deleteFilm() {
+  if (!confirm(`Xoá phim “${state.film.title}” và video đã ghép?\nCác request của từng cảnh vẫn giữ trong mục Requests.`)) return;
+  await localJson(`/api/projects/${state.film.id}`, { method: "DELETE" });
+  state.film = null;
+  location.hash = "#/films";
+}
+
 /* ---------- routing ---------- */
 
 function parseRoute() {
@@ -876,6 +1209,10 @@ function parseRoute() {
   if (detail) return { name: "detail", id: detail[1] };
   if (path === "/new") return { name: "new", from: params.get("from"), continueFrom: params.get("continue") };
   if (path === "/settings") return { name: "settings" };
+  if (path === "/films") return { name: "films" };
+  if (path === "/films/new") return { name: "film", id: null };
+  const film = path.match(/^\/films\/([a-f0-9]{32})$/);
+  if (film) return { name: "film", id: film[1] };
   return { name: "requests" };
 }
 
@@ -883,10 +1220,11 @@ function route() {
   closeMenu();
   clearTimeout(state.listTimer);
   clearTimeout(state.detailTimer);
+  clearTimeout(state.filmTimer);
   const current = parseRoute();
   state.route = current;
   document.querySelectorAll(".view").forEach((section) => { section.hidden = section.id !== `view-${current.name}`; });
-  const nav = current.name === "detail" ? "requests" : current.name;
+  const nav = { detail: "requests", film: "films" }[current.name] || current.name;
   document.querySelectorAll("[data-nav]").forEach((link) => {
     const active = link.dataset.nav === nav;
     link.classList.toggle("active", active);
@@ -928,6 +1266,16 @@ function route() {
     state.chainFor = null;
     showBox("detail-error", "");
     loadDetail(current.id);
+  } else if (current.name === "films") {
+    document.title = "Phim dài · MiniMax H3 Studio";
+    loadFilms();
+  } else if (current.name === "film") {
+    showBox("film-form-error", "");
+    $("film-progress").hidden = true;
+    if (current.id) {
+      $("film-heading").textContent = "Đang tải…";
+      loadFilm(current.id);
+    } else openNewFilm();
   } else {
     document.title = "Cài đặt · MiniMax H3 Studio";
     $("api-key").value = state.savedKey;
@@ -1003,6 +1351,29 @@ $("detail-copy").addEventListener("click", () => { if (state.detail) location.ha
 $("detail-delete").addEventListener("click", async () => {
   if (state.detail && await deleteRequest(state.detail)) location.hash = "#/requests";
 });
+
+$("film-add-scene").addEventListener("click", () => {
+  syncFilmScenes();
+  state.filmScenes.push(newFilmScene());
+  renderFilmScenes();
+  document.querySelector("#film-scenes .film-scene:last-child textarea")?.focus();
+});
+$("film-save").addEventListener("click", () => filmAction($("film-save"), saveFilm));
+$("film-start").addEventListener("click", () => filmAction($("film-start"), startFilm));
+$("film-stop").addEventListener("click", () => filmAction($("film-stop"), stopFilm));
+$("film-delete").addEventListener("click", () => filmAction($("film-delete"), deleteFilm));
+$("film-form").addEventListener("submit", (event) => event.preventDefault());
+for (let slot = 1; slot <= 3; slot++) {
+  $(`film-image-${slot}`).addEventListener("change", (event) => {
+    const file = event.target.files[0];
+    if (file && !["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      event.target.value = "";
+      return showBox("film-form-error", `Ảnh ${slot} phải là PNG, JPG hoặc WebP.`);
+    }
+    state.filmImages[slot - 1] = file || null;
+    setFilmPreview(slot, file ? URL.createObjectURL(file) : null, file ? `${file.name} · ${sizeLabel(file.size)}` : null);
+  });
+}
 
 $("settings-form").addEventListener("submit", saveKey);
 $("delete-key").addEventListener("click", deleteKey);

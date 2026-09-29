@@ -83,6 +83,28 @@ if ! PYTHON="$(find_python)"; then
 fi
 echo "Dùng $PYTHON ($("$PYTHON" --version 2>&1))"
 
+say "Kiểm tra ffmpeg (lấy khung cuối và ghép phim)"
+if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+  echo "Chưa có ffmpeg. Đang cài…"
+  if [ "$OS" = "Darwin" ]; then
+    command -v brew >/dev/null 2>&1 || fail "Cần Homebrew (https://brew.sh) để cài ffmpeg, hoặc tự cài ffmpeg rồi chạy lại."
+    brew install ffmpeg
+  elif command -v apt-get >/dev/null 2>&1; then
+    as_root apt-get update
+    as_root apt-get install -y ffmpeg
+  elif command -v dnf >/dev/null 2>&1; then
+    as_root dnf install -y ffmpeg || fail "dnf không cài được ffmpeg (có thể cần bật RPM Fusion). Hãy tự cài ffmpeg rồi chạy lại."
+  else
+    fail "Không nhận ra trình quản lý gói. Hãy cài ffmpeg rồi chạy lại."
+  fi
+  hash -r
+fi
+FFMPEG="$(command -v ffmpeg)" || fail "Không tìm thấy ffmpeg sau khi cài."
+command -v ffprobe >/dev/null 2>&1 || fail "Không tìm thấy ffprobe (thường đi kèm ffmpeg)."
+echo "Dùng $FFMPEG ($("$FFMPEG" -version | head -1))"
+# Background services start with a minimal PATH; give them the ffmpeg directory.
+SERVICE_PATH="$(dirname "$FFMPEG"):/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 say "Kiểm tra code"
 "$PYTHON" -m py_compile "$REPO_DIR/web_ui.py"
 "$PYTHON" "$REPO_DIR/scripts/check_workflow.py"
@@ -144,7 +166,7 @@ if [ "$OS" = "Darwin" ]; then
     for arg in "${ARGS[@]}"; do printf '    <string>%s</string>\n' "$arg"; done
     echo '  </array>'
     echo "  <key>WorkingDirectory</key><string>${REPO_DIR}</string>"
-    echo '  <key>EnvironmentVariables</key><dict><key>PYTHONUNBUFFERED</key><string>1</string></dict>'
+    echo "  <key>EnvironmentVariables</key><dict><key>PYTHONUNBUFFERED</key><string>1</string><key>PATH</key><string>${SERVICE_PATH}</string></dict>"
     echo '  <key>RunAtLoad</key><true/>'
     echo '  <key>KeepAlive</key><true/>'
     echo "  <key>StandardOutPath</key><string>${LOG}</string>"
@@ -169,6 +191,7 @@ After=network-online.target
 [Service]
 WorkingDirectory=${REPO_DIR}
 Environment=PYTHONUNBUFFERED=1
+Environment=PATH=${SERVICE_PATH}
 ExecStart=${EXEC# }
 Restart=always
 RestartSec=3
