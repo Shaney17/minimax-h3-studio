@@ -129,7 +129,9 @@ This checks the code (Python, JavaScript, shell syntax, and the workflow — als
 against the worker `Dockerfile` when `../minimax-h3-cinematic-runpod` or
 `H3_WORKER_DIR` exists), commits all changes, pushes `main` to GitHub, then SSHs
 to the host to pull and rerun `install.sh`. The host is remembered in
-`.deploy.env`, so later deploys only need `scripts/deploy.sh -m "..."`. Use the
+`.deploy.env`, so later deploys only need `scripts/deploy.sh -m "..."`. Add
+`--dir ~/path/to/checkout` when the host keeps the repo somewhere other than
+`~/minimax-h3-studio`; it is remembered too. Use the
 host's Tailscale name so SSH also stays inside the tailnet (Tailscale SSH or
 regular SSH both work). `--no-remote` only pushes.
 
